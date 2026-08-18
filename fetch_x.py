@@ -1,7 +1,7 @@
 import json, os, re, time, urllib.request, urllib.error
 from pathlib import Path
 
-URL = Path('request.txt').read_text(encoding='utf-8').strip()
+URL = Path('request.txt').read_text(encoding='utf-8').splitlines()[0].strip()
 m = re.search(r'(?:x|twitter)\.com/([^/]+)/status/(\d+)', URL)
 if not m:
     raise SystemExit('Invalid X/Twitter status URL')
