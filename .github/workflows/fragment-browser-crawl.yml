@@ -1,0 +1,77 @@
+name: Fragment Browser Crawl
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fragment-browser-crawl.yml"
+      - "fragment-browser-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fragment-browser-crawl
+  cancel-in-progress: true
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Crawl Fragment
+        run: |
+          mkdir -p crawl-results
+          python - <<'PY'
+          import json,re,time
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          urls=[
+            'https://fragment.com/',
+            'https://fragment.com/?query=ai',
+            'https://fragment.com/?query=shop',
+            'https://fragment.com/?query=travel',
+          ]
+          output=[]
+          with sync_playwright() as p:
+            browser=p.chromium.launch(headless=True,args=['--disable-blink-features=AutomationControlled','--no-sandbox'])
+            ctx=browser.new_context(viewport={'width':1440,'height':1000},locale='en-US',user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36')
+            for i,url in enumerate(urls):
+              page=ctx.new_page(); net=[]
+              page.on('response',lambda r,net=net: net.append({'url':r.url,'status':r.status,'type':r.request.resource_type}) if r.request.resource_type in ['xhr','fetch','document'] else None)
+              row={'url':url}
+              try:
+                resp=page.goto(url,wait_until='domcontentloaded',timeout=90000)
+                row['status']=resp.status if resp else None
+                page.wait_for_timeout(7000)
+                for _ in range(8):
+                  page.mouse.wheel(0,2000); page.wait_for_timeout(600)
+                text=page.locator('body').inner_text(timeout=20000)
+                links=page.eval_on_selector_all('a','els => els.map(a => ({text:(a.innerText||"").trim(),href:a.href}))')
+                row['title']=page.title(); row['text']=text[:500000]; row['links']=links[:5000]; row['network']=net[-2000:]
+                row['usernames']=sorted(set(re.findall(r'@([A-Za-z0-9_]{4,32})',text)))[:5000]
+                page.screenshot(path=f'crawl-results/fragment-{i}.png',full_page=False)
+              except Exception as e:
+                row['error']=repr(e)
+                try: page.screenshot(path=f'crawl-results/fragment-{i}-error.png',full_page=False)
+                except Exception: pass
+              finally: page.close()
+              output.append(row)
+            browser.close()
+          Path('crawl-results/fragment.json').write_text(json.dumps({'captured_at':time.time(),'results':output},ensure_ascii=False,indent=2))
+          PY
+      - name: Commit result
+        run: |
+          git config user.name "runner-6-bot"
+          git config user.email "runner-6-bot@users.noreply.github.com"
+          git add crawl-results/
+          git commit -m "Update Fragment browser crawl" || exit 0
+          git push
