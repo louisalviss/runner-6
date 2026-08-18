@@ -1,0 +1,39 @@
+name: Runner 6 X Viewer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/x-view.yml"
+      - "fetch_x.py"
+      - "request.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-x-view
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Fetch X post
+        run: python fetch_x.py
+      - name: Commit result
+        run: |
+          git config user.name "runner-6-bot"
+          git config user.email "runner-6-bot@users.noreply.github.com"
+          git add x-result.json
+          if [ -f x-page.png ]; then git add x-page.png; fi
+          git commit -m "Update X fetch result" || exit 0
+          git push
