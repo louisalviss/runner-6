@@ -1,0 +1,10 @@
+{
+  "status": "installed_no_api_key",
+  "dsh_version": "0.1.0-rc.7",
+  "exit_code": 0,
+  "task": "Reply exactly: DSH_OK\n",
+  "output": "No API key secret configured; DSH install smoke test passed.\n",
+  "stderr": "",
+  "run_id": "32230828626",
+  "sha": "ac51954bbd33b190adbf113815e08d23585f0df1"
+}
