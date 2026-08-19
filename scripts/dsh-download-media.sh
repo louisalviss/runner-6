@@ -41,33 +41,66 @@ run_ytdlp() {
   timeout --signal=TERM --kill-after=5s 120s "$YTDLP" "${COMMON[@]}" "$@" "$URL"
 }
 
-set +e
-OUT="$(run_ytdlp -f "$FORMAT")"
-CODE=$?
-set -e
-
-# Try public yt-dlp clients first. No account cookies or login are used.
-if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+try_public_clients() {
+  local out code
   set +e
-  OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' \
-    -f "best[height<=${HEIGHT}]/best")"
-  CODE=$?
+  out="$(run_ytdlp -f "$FORMAT")"
+  code=$?
   set -e
+
+  if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+    set +e
+    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' \
+      -f "best[height<=${HEIGHT}]/best")"
+    code=$?
+    set -e
+  fi
+
+  if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+    set +e
+    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' \
+      -f "best[height<=${HEIGHT}]/best")"
+    code=$?
+    set -e
+  fi
+
+  PUBLIC_OUT="$out"
+  PUBLIC_CODE="$code"
+}
+
+PUBLIC_OUT=''
+PUBLIC_CODE=1
+try_public_clients
+OUT="$PUBLIC_OUT"
+CODE="$PUBLIC_CODE"
+
+# GitHub-hosted Azure egress is often challenged by YouTube. For YouTube only,
+# retry the same bounded public-client chain after switching the runner egress
+# through Cloudflare WARP. WARP is connected only after the DSH/OpenRouter brain
+# step has finished; disconnect immediately after the media attempt.
+if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+  echo 'Direct YouTube download blocked; switching media egress through Cloudflare WARP.' >&2
+  WARP_CONNECTED=0
+  set +e
+  bash scripts/setup-cloudflare-warp.sh >&2
+  WARP_CODE=$?
+  set -e
+  if [ "$WARP_CODE" -eq 0 ]; then
+    WARP_CONNECTED=1
+    try_public_clients
+    OUT="$PUBLIC_OUT"
+    CODE="$PUBLIC_CODE"
+  fi
+  if [ "$WARP_CONNECTED" -eq 1 ]; then
+    warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+  fi
 fi
 
+# Final fallback: isolated VPNGate rotation pattern from runner-7. Only the
+# media subprocess enters the public relay namespace; no model/GitHub secrets
+# are passed to it.
 if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
-  set +e
-  OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' \
-    -f "best[height<=${HEIGHT}]/best")"
-  CODE=$?
-  set -e
-fi
-
-# GitHub-hosted Azure egress is sometimes challenged by YouTube. Reuse the
-# isolated VPNGate rotation pattern already used by runner-7, but only for the
-# media subprocess. The DSH/OpenRouter/GitHub credential steps are already over.
-if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
-  echo 'Direct YouTube download blocked; trying isolated relay worker.' >&2
+  echo 'WARP/public clients still blocked; trying isolated VPNGate relay worker.' >&2
   set +e
   OUT="$(YTDLP_BIN="$YTDLP" bash scripts/dsh-ytdlp-vpngate.sh "$URL" "$HEIGHT")"
   CODE=$?
