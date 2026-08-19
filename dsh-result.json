@@ -1,10 +1,14 @@
 {
-  "status": "installed_no_api_key",
+  "status": "success_tool_smoke",
+  "provider": "openrouter-v4",
+  "model": "deepseek/deepseek-v4-pro",
   "dsh_version": "0.1.0-rc.7",
   "exit_code": 0,
-  "task": "__SMOKE_TOOL__\n",
-  "output": "No API key secret configured; DSH install smoke test passed.\n",
-  "stderr": "",
-  "run_id": "32244794428",
-  "sha": "14987b37527c6161d56f6dfabedf467bd229d547"
+  "tool_smoke": true,
+  "tool_smoke_passed": true,
+  "task": "Use an available filesystem-reading tool to read dsh-probe.txt in the current workspace. You must inspect the file. Reply with exactly the file contents and nothing else.\n",
+  "output": "DSH_TOOL_OK_f3a3daeb968044fe5fe8724151366762\n",
+  "stderr": "npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n",
+  "run_id": "32246524978",
+  "sha": "09c84b1afd12b058ec79d3591792203e04d582ae"
 }
