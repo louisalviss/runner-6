@@ -1,0 +1,129 @@
+name: OpenRouter Balance Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "openrouter-balance-request.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openrouter-balance-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Decrypt one-time request
+        id: dec
+        env:
+          DSH_CHAT_PRIVATE_KEY_B64: ${{ secrets.DSH_CHAT_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          cp openrouter-balance-request.txt "$RUNNER_TEMP/request.enc"
+          node scripts/dsh-handoff-crypto.mjs decrypt-envelope \
+            "$RUNNER_TEMP/request.enc" \
+            "$RUNNER_TEMP/request.txt" \
+            "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/client-id.txt"
+          test "$(cat "$RUNNER_TEMP/request.txt")" = "openrouter-balance-check-v1"
+
+      - name: Query OpenRouter account and key metadata
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            printf '%s' '{"error":"missing_openrouter_key"}' > "$RUNNER_TEMP/key.json"
+            printf '%s' '{"error":"missing_openrouter_key"}' > "$RUNNER_TEMP/credits.json"
+            echo 000 > "$RUNNER_TEMP/key.http"
+            echo 000 > "$RUNNER_TEMP/credits.http"
+          else
+            curl --connect-timeout 10 --max-time 25 -sS \
+              -o "$RUNNER_TEMP/key.json" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+              https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/key.http" || true
+            curl --connect-timeout 10 --max-time 25 -sS \
+              -o "$RUNNER_TEMP/credits.json" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+              https://openrouter.ai/api/v1/credits > "$RUNNER_TEMP/credits.http" || true
+          fi
+          unset OPENROUTER_API_KEY
+
+      - name: Build private sanitized result
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const t=process.env.RUNNER_TEMP;
+          const read=(p)=>{try{return JSON.parse(fs.readFileSync(`${t}/${p}`,'utf8'))}catch{return null}};
+          const code=(p)=>{try{return fs.readFileSync(`${t}/${p}`,'utf8').trim()}catch{return '000'}};
+          const k=read('key.json'); const c=read('credits.json');
+          const kd=k?.data||{}; const cd=c?.data||{};
+          const result={
+            checked_at:new Date().toISOString(),
+            key_http:Number(code('key.http'))||0,
+            credits_http:Number(code('credits.http'))||0,
+            key:{
+              valid:code('key.http')==='200',
+              is_management_key:kd.is_management_key??null,
+              is_free_tier:kd.is_free_tier??null,
+              usage:kd.usage??null,
+              usage_daily:kd.usage_daily??null,
+              usage_weekly:kd.usage_weekly??null,
+              usage_monthly:kd.usage_monthly??null,
+              limit:kd.limit??null,
+              limit_remaining:kd.limit_remaining??null,
+              limit_reset:kd.limit_reset??null,
+              expires_at:kd.expires_at??null
+            },
+            credits:{
+              available:code('credits.http')==='200',
+              total_credits:cd.total_credits??null,
+              total_usage:cd.total_usage??null,
+              remaining:(typeof cd.total_credits==='number'&&typeof cd.total_usage==='number')?(cd.total_credits-cd.total_usage):null
+            },
+            credits_error:code('credits.http')==='200'?null:(c?.error?.message||c?.message||null),
+            key_error:code('key.http')==='200'?null:(k?.error?.message||k?.message||null)
+          };
+          fs.writeFileSync(`${t}/result.json`,JSON.stringify(result));
+          NODE
+
+      - name: Encrypt result
+        run: |
+          set -euo pipefail
+          CID="$(cat "$RUNNER_TEMP/client-id.txt")"
+          node scripts/dsh-handoff-crypto.mjs encrypt-json \
+            "$RUNNER_TEMP/result.json" \
+            "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/result.enc.json" \
+            "$CID" "$GITHUB_RUN_ID"
+          rm -f "$RUNNER_TEMP/result.json" "$RUNNER_TEMP/key.json" "$RUNNER_TEMP/credits.json" "$RUNNER_TEMP/request.txt" "$RUNNER_TEMP/session-key.b64"
+
+      - name: Publish encrypted result and safe status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CID="$(cat "$RUNNER_TEMP/client-id.txt")"
+          put(){
+            P="$1"; F="$2"; M="$3"; C="$(base64 -w0 "$F")"
+            S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"
+            if [ -n "$S" ]; then
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f sha="$S" -f branch=main >/dev/null
+            else
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f branch=main >/dev/null
+            fi
+          }
+          put openrouter-balance-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted OpenRouter balance result [skip ci]'
+          printf '{"status":"success","run_id":"%s","client_id":"%s"}\n' "$GITHUB_RUN_ID" "$CID" > "$RUNNER_TEMP/status.json"
+          put openrouter-balance-status.json "$RUNNER_TEMP/status.json" 'Update safe OpenRouter balance status [skip ci]'
