@@ -12,10 +12,12 @@ permissions:
 jobs:
   prime:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       DSH_VERSION: "0.1.0-rc.7"
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      PNPM_VERSION: "11.7.0"
+      CACHE_KEY: runner6-dsh-runtime-Linux-rc7-pwmcp078-pnpm-v2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,22 +31,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf '{"status":"started","run_id":"%s","cache_key":"runner6-dsh-runtime-Linux-rc7-pwmcp078-v1"}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          printf '{"status":"started","run_id":"%s","installer":"pnpm","cache_key":"%s"}\n' "$GITHUB_RUN_ID" "$CACHE_KEY" > "$RUNNER_TEMP/status.json"
           CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
           SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json?ref=main" --jq .sha 2>/dev/null || true)"
-          if [ -n "$SHA" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH runtime cache primer started [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH runtime cache primer started [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null; fi
-      - name: Restore runtime cache
-        uses: actions/cache@v4
+          if [ -n "$SHA" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH pnpm runtime primer started [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH pnpm runtime primer started [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null; fi
+      - name: Restore DSH runtime cache
+        id: restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/runner6-dsh-runtime
-            ~/.npm
-          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
-          save-always: true
-      - name: Install runtime
+            ~/.cache/runner6-pnpm-store
+            ~/.cache/corepack
+          key: ${{ env.CACHE_KEY }}
+      - name: Install runtime with upstream pnpm
         run: bash workspace/scripts/setup-dsh-runtime.sh
       - name: Verify DSH binary
         run: timeout 30s "$DSH_BIN" --version | tee "$RUNNER_TEMP/version.txt"
+      - name: Save DSH runtime cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.cache/runner6-pnpm-store
+            ~/.cache/corepack
+          key: ${{ env.CACHE_KEY }}
       - name: Publish primer success
         env:
           GH_TOKEN: ${{ github.token }}
@@ -55,8 +67,8 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          Path(os.environ['RUNNER_TEMP'],'status.json').write_text(json.dumps({'status':'success','run_id':os.environ['GITHUB_RUN_ID'],'version':os.environ.get('VERSION',''),'cache_key':'runner6-dsh-runtime-Linux-rc7-pwmcp078-v1'},separators=(',',':')))
+          Path(os.environ['RUNNER_TEMP'],'status.json').write_text(json.dumps({'status':'success','run_id':os.environ['GITHUB_RUN_ID'],'version':os.environ.get('VERSION',''),'installer':'pnpm','cache_key':os.environ['CACHE_KEY']},separators=(',',':')))
           PY
           CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
           SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json?ref=main" --jq .sha 2>/dev/null || true)"
-          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH runtime cache ready [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='DSH pnpm runtime cache ready [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
