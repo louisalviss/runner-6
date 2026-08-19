@@ -11,6 +11,9 @@ if (cmd === 'decrypt-envelope') {
   const p = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
   if (p.v !== 1 || !p.client_id || !p.ek || !p.iv || !p.ct) throw new Error('invalid envelope');
   if (!/^[A-Za-z0-9_-]{12,80}$/.test(p.client_id)) throw new Error('invalid client id');
+  // Persist the non-sensitive client id before RSA/AES work so decrypt failures
+  // can still be correlated to the exact browser request instead of hanging UI.
+  fs.writeFileSync(clientPath,p.client_id,{mode:0o600});
   const priv = process.env.DSH_CHAT_PRIVATE_KEY_B64;
   if (!priv) throw new Error('missing private key');
   const privateKey = crypto.createPrivateKey({key: Buffer.from(priv, 'base64'), format:'der', type:'pkcs8'});
@@ -23,7 +26,6 @@ if (cmd === 'decrypt-envelope') {
   if (!task.trim()) throw new Error('empty task');
   fs.writeFileSync(taskPath,task,{mode:0o600});
   fs.writeFileSync(keyPath,b64u(aesKey),{mode:0o600});
-  fs.writeFileSync(clientPath,p.client_id,{mode:0o600});
 } else if (cmd === 'encrypt-json') {
   const [jsonPath,keyPath,outPath,clientId,runId] = args;
   const key = Buffer.from(fs.readFileSync(keyPath,'utf8').trim(),'base64url');
