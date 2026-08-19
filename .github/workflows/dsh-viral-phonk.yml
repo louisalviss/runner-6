@@ -1,0 +1,174 @@
+name: DSH Viral Phonk Download
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-viral-phonk-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-viral-phonk
+  cancel-in-progress: true
+
+jobs:
+  viral-phonk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Configure OpenRouter
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+
+      - name: Activate runtime
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Ask DSH to identify and queue current viral phonk
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          TASK='Use the Playwright browser and current public web information to identify the single phonk/funk track that has the strongest evidence of being viral on TikTok right now, as of 2026-08-20. Do not assume an old all-time phonk hit is still current. Cross-check at least 3 recent signals or rankings where possible, prioritizing recency, TikTok relevance, and cross-source consensus. Then find a clean public source for that exact track, preferably an official artist/label YouTube upload when available, otherwise the best clean matching public source. Follow AGENTS.md music/audio selection rules. Queue the audio download with: bash scripts/dsh-request-audio.sh SOURCE_URL "artist - title". Do not run yt-dlp yourself. Also create dsh-handoff/selection.json containing selected_title, artist, selected_url, reason, and evidence as an array of short source/signal descriptions. Finish with DSH_VIRAL_PHONK_QUEUED.'
+          set +e
+          timeout --signal=TERM --kill-after=10s 240s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          unset TASK OPENROUTER_API_KEY
+
+      - name: Execute queued audio download
+        id: download
+        if: steps.dsh.outputs.exit_code == '0'
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          test -s .dsh-download-request.json
+          URL="$(python - <<'PY'
+          import json
+          print(json.load(open('.dsh-download-request.json'))['url'])
+          PY
+          )"
+          bash scripts/dsh-download-media.sh "$URL" 720
+
+      - name: Validate handoff
+        id: validate
+        if: always()
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          PRESENT=false
+          if [ "${{ steps.dsh.outputs.exit_code }}" = '0' ] && [ -s dsh-handoff/handoff.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          h=json.loads(Path('dsh-handoff/handoff.json').read_text())
+          assert h.get('media_type') == 'audio', h
+          p=Path(h['relative_path'])
+          assert p.exists() and p.stat().st_size > 0, h
+          print(json.dumps(h, ensure_ascii=False))
+          PY
+            PRESENT=true
+          fi
+          echo "present=$PRESENT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload audio handoff
+        if: steps.validate.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-viral-phonk-${{ github.run_id }}
+          path: workspace/dsh-handoff/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DSH_EXIT: ${{ steps.dsh.outputs.exit_code }}
+          PRESENT: ${{ steps.validate.outputs.present }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          from pathlib import Path
+          present=os.environ.get('PRESENT') == 'true'
+          code=os.environ.get('DSH_EXIT') or '1'
+          status='success' if present else ('dsh_error' if code != '0' else 'download_error')
+          data={'status':status,'run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':present}
+          sp=Path('dsh-handoff/selection.json')
+          hp=Path('dsh-handoff/handoff.json')
+          if sp.exists():
+              try: data['selection']=json.loads(sp.read_text())
+              except Exception: pass
+          if hp.exists():
+              try: data['handoff']=json.loads(hp.read_text())
+              except Exception: pass
+          print(json.dumps(data,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-viral-phonk-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-viral-phonk-status.json" -f message='Update DSH viral phonk status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-viral-phonk-status.json" -f message='Update DSH viral phonk status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
+      - name: Validate job result
+        run: |
+          [ "${{ steps.validate.outputs.present }}" = true ] || exit 1
