@@ -16,10 +16,12 @@ concurrency:
 jobs:
   named-track:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 14
     env:
       DSH_VERSION: "0.1.0-rc.7"
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      PRIMARY_MODEL: "nvidia/nemotron-3-ultra-550b-a55b:free"
+      FALLBACK_MODEL: "deepseek/deepseek-v4-pro"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,14 +32,102 @@ jobs:
           node-version: "24"
       - name: Runtime paths
         run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
-      - name: Configure OpenRouter
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+      - name: Activate runtime
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Configure free primary model
         run: |
           set -euo pipefail
           mkdir -p "$DSH_HOME"
           cat > "$DSH_HOME/settings.yaml" <<'YAML'
           llm-pi-ai:
             providers:
-              openrouter-v4:
+              openrouter-primary:
+                displayName: OpenRouter Nemotron Free
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: nvidia/nemotron-3-ultra-550b-a55b:free
+                    name: Nemotron 3 Ultra Free
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-primary
+            model: nvidia/nemotron-3-ultra-550b-a55b:free
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Ask free DSH to resolve exact track
+        id: primary
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff .dsh-download-request.json
+          mkdir -p dsh-handoff
+          REQUEST="$(cat dsh-named-track-request.txt)"
+          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Resolve the canonical artist/title and choose the cleanest matching public source. You MUST search for an official artist, official label, or official Topic/auto-generated YouTube upload before accepting any repost. Prefer the canonical original version unless the request explicitly names a variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, source_channel, source_tier, verified_official, reason, evidence. source_tier MUST be exactly one of: official_artist, official_label, official_topic, repost, other. verified_official MUST be true only when the source is actually official artist/label/Topic. Finish with DSH_NAMED_TRACK_QUEUED."
+          START=$(date +%s)
+          set +e
+          timeout --signal=TERM --kill-after=10s 240s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-primary-output.txt" 2> "$RUNNER_TEMP/dsh-primary-error.txt"
+          CODE=$?
+          set -e
+          END=$(date +%s)
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "agent_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+          unset REQUEST TASK OPENROUTER_API_KEY
+
+      - name: Decide whether paid fallback is needed
+        id: gate
+        if: always()
+        working-directory: workspace
+        env:
+          PRIMARY_CODE: ${{ steps.primary.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          USE_FALLBACK=true
+          ACCEPTED=false
+          if [ "$PRIMARY_CODE" = "0" ] && [ -s dsh-handoff/selection.json ] && [ -s .dsh-download-request.json ]; then
+            cp dsh-handoff/selection.json dsh-handoff/primary-selection.json
+            ACCEPTED="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('dsh-handoff/selection.json').read_text())
+          tier=s.get('source_tier')
+          verified=s.get('verified_official') is True
+          url=str(s.get('selected_url',''))
+          ok=tier in {'official_artist','official_label','official_topic'} and verified and 'youtube.com/watch' in url
+          print('true' if ok else 'false')
+          PY
+            )"
+          fi
+          if [ "$ACCEPTED" = "true" ]; then USE_FALLBACK=false; fi
+          echo "accepted_primary=$ACCEPTED" >> "$GITHUB_OUTPUT"
+          echo "use_fallback=$USE_FALLBACK" >> "$GITHUB_OUTPUT"
+
+      - name: Configure DeepSeek V4 Pro fallback
+        if: steps.gate.outputs.use_fallback == 'true'
+        run: |
+          set -euo pipefail
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-fallback:
                 displayName: OpenRouter DeepSeek V4 Pro
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
@@ -51,49 +141,72 @@ jobs:
                     maxTokens: 8192
                     input: [text]
           agent-default-model:
-            provider: openrouter-v4
+            provider: openrouter-fallback
             model: deepseek/deepseek-v4-pro
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
-      - name: Restore DSH runtime
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cache/runner6-dsh-runtime
-            ~/.npm
-          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
-          fail-on-cache-miss: true
-      - name: Activate runtime
-        run: bash workspace/scripts/activate-dsh-runtime.sh
-      - name: Configure browser
-        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
-      - name: Ask DSH to find exact track and queue audio
-        id: dsh
+
+      - name: Ask paid fallback to resolve exact track
+        id: fallback
+        if: steps.gate.outputs.use_fallback == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -uo pipefail
+          rm -f .dsh-download-request.json dsh-handoff/selection.json
           REQUEST="$(cat dsh-named-track-request.txt)"
-          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Resolve the canonical artist/title and choose the cleanest matching public source, preferring an official artist/label/Topic YouTube upload when available. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, reason. Finish with DSH_NAMED_TRACK_QUEUED."
+          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Resolve the canonical artist/title and choose the cleanest matching public source. You MUST search for an official artist, official label, or official Topic/auto-generated YouTube upload before accepting any repost. Prefer the canonical original version unless the request explicitly names a variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, source_channel, source_tier, verified_official, reason, evidence. source_tier MUST be exactly one of: official_artist, official_label, official_topic, repost, other. verified_official MUST reflect the real source. Finish with DSH_NAMED_TRACK_QUEUED."
+          START=$(date +%s)
           set +e
-          timeout --signal=TERM --kill-after=10s 180s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          timeout --signal=TERM --kill-after=10s 240s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-fallback-output.txt" 2> "$RUNNER_TEMP/dsh-fallback-error.txt"
           CODE=$?
           set -e
+          END=$(date +%s)
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "agent_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
           unset REQUEST TASK OPENROUTER_API_KEY
+
+      - name: Select resolved result
+        id: chosen
+        if: always()
+        working-directory: workspace
+        env:
+          USE_FALLBACK: ${{ steps.gate.outputs.use_fallback }}
+          PRIMARY_CODE: ${{ steps.primary.outputs.exit_code }}
+          FALLBACK_CODE: ${{ steps.fallback.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          READY=false
+          MODEL_USED="$PRIMARY_MODEL"
+          FALLBACK_USED=false
+          if [ "$USE_FALLBACK" = "true" ]; then
+            MODEL_USED="$FALLBACK_MODEL"
+            FALLBACK_USED=true
+            [ "$FALLBACK_CODE" = "0" ] && [ -s .dsh-download-request.json ] && [ -s dsh-handoff/selection.json ] && READY=true
+          else
+            [ "$PRIMARY_CODE" = "0" ] && [ -s .dsh-download-request.json ] && [ -s dsh-handoff/selection.json ] && READY=true
+          fi
+          echo "ready=$READY" >> "$GITHUB_OUTPUT"
+          echo "model_used=$MODEL_USED" >> "$GITHUB_OUTPUT"
+          echo "fallback_used=$FALLBACK_USED" >> "$GITHUB_OUTPUT"
+
       - name: Execute queued audio download
-        if: steps.dsh.outputs.exit_code == '0'
+        id: download
+        if: steps.chosen.outputs.ready == 'true'
         working-directory: workspace
         run: |
           set -euo pipefail
-          test -s .dsh-download-request.json
+          START=$(date +%s)
           URL="$(python - <<'PY'
           import json
           print(json.load(open('.dsh-download-request.json'))['url'])
           PY
           )"
           bash scripts/dsh-download-media.sh "$URL" 720
+          END=$(date +%s)
+          echo "download_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+
       - name: Validate handoff
         id: validate
         if: always()
@@ -114,6 +227,7 @@ jobs:
             PRESENT=true
           fi
           echo "present=$PRESENT" >> "$GITHUB_OUTPUT"
+
       - name: Upload handoff
         if: steps.validate.outputs.present == 'true'
         uses: actions/upload-artifact@v4
@@ -123,19 +237,36 @@ jobs:
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
+
       - name: Publish status
         if: always()
         working-directory: workspace
         env:
           GH_TOKEN: ${{ github.token }}
           PRESENT: ${{ steps.validate.outputs.present }}
+          MODEL_USED: ${{ steps.chosen.outputs.model_used }}
+          FALLBACK_USED: ${{ steps.chosen.outputs.fallback_used }}
+          PRIMARY_ACCEPTED: ${{ steps.gate.outputs.accepted_primary }}
+          PRIMARY_SECONDS: ${{ steps.primary.outputs.agent_seconds }}
+          FALLBACK_SECONDS: ${{ steps.fallback.outputs.agent_seconds }}
+          DOWNLOAD_SECONDS: ${{ steps.download.outputs.download_seconds }}
         run: |
           set -euo pipefail
           python - <<'PY' > "$RUNNER_TEMP/status.json"
           import json, os
           from pathlib import Path
-          data={'status':'success' if os.environ.get('PRESENT')=='true' else 'error','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':os.environ.get('PRESENT')=='true'}
-          for key,path in [('selection','dsh-handoff/selection.json'),('handoff','dsh-handoff/handoff.json')]:
+          data={
+            'status':'success' if os.environ.get('PRESENT')=='true' else 'error',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'artifact_present':os.environ.get('PRESENT')=='true',
+            'model_used':os.environ.get('MODEL_USED',''),
+            'fallback_used':os.environ.get('FALLBACK_USED')=='true',
+            'primary_accepted':os.environ.get('PRIMARY_ACCEPTED')=='true',
+            'primary_agent_seconds':int(os.environ.get('PRIMARY_SECONDS') or 0),
+            'fallback_agent_seconds':int(os.environ.get('FALLBACK_SECONDS') or 0),
+            'download_seconds':int(os.environ.get('DOWNLOAD_SECONDS') or 0),
+          }
+          for key,path in [('selection','dsh-handoff/selection.json'),('primary_selection','dsh-handoff/primary-selection.json'),('handoff','dsh-handoff/handoff.json')]:
               p=Path(path)
               if p.exists():
                   try:data[key]=json.loads(p.read_text())
@@ -149,5 +280,6 @@ jobs:
           else
             gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-named-track-status.json" -f message='Update DSH named track status [skip ci]' -f content="$C" -f branch=main >/dev/null
           fi
+
       - name: Validate job result
         run: '[ "${{ steps.validate.outputs.present }}" = true ] || exit 1'
