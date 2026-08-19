@@ -1,1 +1,1 @@
-{"status":"started","run_id":"32296785484","client_id":"securev2_19b8e3d4772d56c59e1cab78","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false}
+{"status":"success","run_id":"32296785484","client_id":"securev2_19b8e3d4772d56c59e1cab78","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":true,"artifact_encrypted":false}
