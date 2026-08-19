@@ -12,6 +12,13 @@ if ! [[ "$HEIGHT" =~ ^[0-9]{3,4}$ ]]; then
   exit 2
 fi
 
+MODE=video
+AUDIO_MARKER='#dsh-audio'
+if [[ "$URL" == *"$AUDIO_MARKER" ]]; then
+  MODE=audio
+  URL="${URL%%$AUDIO_MARKER*}"
+fi
+
 mkdir -p dsh-handoff/downloads
 
 YTDLP="$HOME/.local/bin/yt-dlp"
@@ -35,7 +42,8 @@ COMMON=(
   -o '%(title).100s_[%(id)s].%(ext)s'
   --print 'after_move:filepath'
 )
-FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
+VIDEO_FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
+AUDIO_FORMAT="bestaudio[ext=m4a]/bestaudio"
 
 run_ytdlp() {
   timeout --signal=TERM --kill-after=5s 120s "$YTDLP" "${COMMON[@]}" "$@" "$URL"
@@ -43,23 +51,24 @@ run_ytdlp() {
 
 try_public_clients() {
   local out code
+  local format="$VIDEO_FORMAT"
+  [ "$MODE" = audio ] && format="$AUDIO_FORMAT"
+
   set +e
-  out="$(run_ytdlp -f "$FORMAT")"
+  out="$(run_ytdlp -f "$format")"
   code=$?
   set -e
 
   if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
     set +e
-    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' \
-      -f "best[height<=${HEIGHT}]/best")"
+    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' -f "$format")"
     code=$?
     set -e
   fi
 
   if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
     set +e
-    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' \
-      -f "best[height<=${HEIGHT}]/best")"
+    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' -f "$format")"
     code=$?
     set -e
   fi
@@ -102,7 +111,7 @@ fi
 if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
   echo 'WARP/public clients still blocked; trying isolated VPNGate relay worker.' >&2
   set +e
-  OUT="$(YTDLP_BIN="$YTDLP" bash scripts/dsh-ytdlp-vpngate.sh "$URL" "$HEIGHT")"
+  OUT="$(YTDLP_BIN="$YTDLP" DSH_MEDIA_MODE="$MODE" bash scripts/dsh-ytdlp-vpngate.sh "$URL" "$HEIGHT")"
   CODE=$?
   set -e
 fi
@@ -126,15 +135,16 @@ case "$ABS" in
 esac
 BYTES="$(stat -c '%s' "$ABS")"
 
-python - "$URL" "$REL" "$BYTES" "$HEIGHT" <<'PY'
+python - "$URL" "$REL" "$BYTES" "$HEIGHT" "$MODE" <<'PY'
 import json, sys
 from pathlib import Path
-url, rel, size, height = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+url, rel, size, height, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 p = Path('dsh-handoff/handoff.json')
-data = {'source_url': url, 'relative_path': rel, 'bytes': size, 'max_height': height}
+data = {'source_url': url, 'relative_path': rel, 'bytes': size, 'max_height': height, 'media_type': mode}
 p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 PY
 
 printf 'Source: %s\n' "$URL"
 printf 'Saved: %s\n' "$REL"
 printf 'Bytes: %s\n' "$BYTES"
+printf 'Media type: %s\n' "$MODE"
