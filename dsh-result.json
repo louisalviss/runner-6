@@ -1,14 +1,14 @@
 {
-  "status": "success_tool_smoke",
+  "status": "success",
   "provider": "openrouter-v4",
   "model": "deepseek/deepseek-v4-pro",
   "dsh_version": "0.1.0-rc.7",
   "exit_code": 0,
-  "tool_smoke": true,
-  "tool_smoke_passed": true,
-  "task": "Use an available filesystem-reading tool to read dsh-probe.txt in the current workspace. You must inspect the file. Reply with exactly the file contents and nothing else.\n",
-  "output": "DSH_TOOL_OK_f3a3daeb968044fe5fe8724151366762\n",
+  "tool_smoke": false,
+  "tool_smoke_passed": false,
+  "task": "Test\n",
+  "output": "I'm here and working. I received your \"Test\" message.\n\nI can help with things like:\n- Reading, writing, and editing files in the workspace\n- Running shell commands and debugging\n- Searching codebases\n- Researching current info on the web\n- Delegating larger tasks to subagents\n\nWhat would you like me to do?\n",
   "stderr": "npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n",
-  "run_id": "32246524978",
-  "sha": "09c84b1afd12b058ec79d3591792203e04d582ae"
+  "run_id": "32253007610",
+  "sha": "18a8239e08b046cae2d40c0b97295ac6d859000b"
 }
