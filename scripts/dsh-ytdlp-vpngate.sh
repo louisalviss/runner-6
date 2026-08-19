@@ -3,10 +3,12 @@ set -euo pipefail
 
 URL="${1:-}"
 HEIGHT="${2:-720}"
+MODE="${DSH_MEDIA_MODE:-video}"
 if [ -z "$URL" ]; then
   echo 'usage: dsh-ytdlp-vpngate.sh <url> [max-height]' >&2
   exit 2
 fi
+case "$MODE" in video|audio) ;; *) echo 'invalid DSH_MEDIA_MODE' >&2; exit 2 ;; esac
 
 YTDLP="${YTDLP_BIN:-$HOME/.local/bin/yt-dlp}"
 NODE_BIN="$(command -v node || true)"
@@ -55,7 +57,7 @@ for country in pref:
         if len(out)>=5: break
     if len(out)>=5: break
 if not out: raise SystemExit('No VPNGate relays available')
-(root/'relays.tsv').write_text('\n'.join('\t'.join(x) for x in out)+'\n')
+(root/'relays.tsv').write_text('\n'.join('\t'.join(x for x in row) for row in out)+'\n')
 print('RELAYS',len(out))
 PY
 
@@ -78,8 +80,13 @@ sudo mkdir -p /etc/netns/dshvpn
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/netns/dshvpn/resolv.conf >/dev/null
 
 mkdir -p dsh-handoff/downloads
-FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
-HLS_FORMAT="best[height<=${HEIGHT}][protocol^=m3u8]/best[height<=${HEIGHT}]/best"
+if [ "$MODE" = audio ]; then
+  FORMAT='bestaudio[ext=m4a]/bestaudio'
+  HLS_FORMAT="$FORMAT"
+else
+  FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
+  HLS_FORMAT="best[height<=${HEIGHT}][protocol^=m3u8]/best[height<=${HEIGHT}]/best"
+fi
 : > "$ROOT/attempts.tsv"
 
 run_in_vpn() {
@@ -117,7 +124,7 @@ try_download() {
 success=0
 final=''
 while IFS=$'\t' read -r cfg country relay; do
-  echo "VPN_TRY country=$country relay=$relay" >&2
+  echo "VPN_TRY country=$country relay=$relay mode=$MODE" >&2
   sudo ip netns exec dshvpn pkill openvpn 2>/dev/null || true
   sleep 1
   sudo rm -f "$ROOT/openvpn.log"
@@ -150,12 +157,9 @@ while IFS=$'\t' read -r cfg country relay; do
     continue
   fi
 
-  echo "VPN_PROBE_OK country=$country exit_ip=$exitip" >&2
+  echo "VPN_PROBE_OK country=$country exit_ip=$exitip mode=$MODE" >&2
   : > "$ROOT/client-attempts.tsv"
 
-  # Client chain is attempted only after a relay passes metadata probe.
-  # web_safari may expose HLS media where the default GVS URL returns 403;
-  # web_embedded is a second public-client fallback. No login/cookies are used.
   if final="$(try_download default "$FORMAT")"; then
     success=1
   elif final="$(try_download safari "$HLS_FORMAT" --extractor-args 'youtube:player_client=web_safari')"; then
@@ -166,7 +170,7 @@ while IFS=$'\t' read -r cfg country relay; do
 
   if [ "$success" = 1 ]; then
     printf '%s\t%s\t%s\tDOWNLOAD_OK\n' "$country" "$relay" "$exitip" >> "$ROOT/attempts.tsv"
-    echo "VPN_OK country=$country exit_ip=$exitip" >&2
+    echo "VPN_OK country=$country exit_ip=$exitip mode=$MODE" >&2
     break
   fi
 
