@@ -1,0 +1,168 @@
+name: Runner 6 DSH Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "One-shot task for DeepSeek Harness"
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/dsh-agent.yml"
+      - "dsh-request.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-agent
+  cancel-in-progress: false
+
+jobs:
+  dsh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Resolve task
+        env:
+          INPUT_TASK: ${{ github.event.inputs.task }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TASK:-}" ]; then
+            printf '%s\n' "$INPUT_TASK" > "$RUNNER_TEMP/dsh-task.txt"
+          elif [ -f dsh-request.txt ]; then
+            cp dsh-request.txt "$RUNNER_TEMP/dsh-task.txt"
+          else
+            printf '%s\n' 'Reply exactly: DSH_OK' > "$RUNNER_TEMP/dsh-task.txt"
+          fi
+
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/dsh-task.txt"; then
+            echo 'Task is blank.' >&2
+            exit 2
+          fi
+
+      - name: Verify official DSH package
+        run: |
+          set -euo pipefail
+          echo "Expected DSH version: $DSH_VERSION"
+          npm view "@deepseek-ai/dsh@$DSH_VERSION" version
+          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --help > "$RUNNER_TEMP/dsh-help.txt"
+          head -n 30 "$RUNNER_TEMP/dsh-help.txt"
+
+      - name: Run DSH headless
+        id: run_dsh
+        env:
+          DEEPSEEK_API_KEY_SECRET: ${{ secrets.DEEPSEEK_API_KEY }}
+          DSH_API_KEY_SECRET: ${{ secrets.DSH_API_KEY }}
+          DSH_BASE_URL_SECRET: ${{ secrets.DSH_BASE_URL }}
+        run: |
+          set -uo pipefail
+
+          API_KEY="${DEEPSEEK_API_KEY_SECRET:-${DSH_API_KEY_SECRET:-}}"
+          TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
+
+          if [ -z "$API_KEY" ]; then
+            printf '%s\n' 'No API key secret configured; DSH install smoke test passed.' > "$RUNNER_TEMP/dsh-output.txt"
+            : > "$RUNNER_TEMP/dsh-error.txt"
+            echo 'missing_key=true' >> "$GITHUB_OUTPUT"
+            echo 'exit_code=0' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          export DEEPSEEK_API_KEY="$API_KEY"
+          if [ -n "${DSH_BASE_URL_SECRET:-}" ]; then
+            export DEEPSEEK_BASE_URL="$DSH_BASE_URL_SECRET"
+          fi
+
+          set +e
+          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
+            > "$RUNNER_TEMP/dsh-output.txt" \
+            2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+
+          echo "missing_key=false" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Build result
+        if: always()
+        env:
+          DSH_MISSING_KEY: ${{ steps.run_dsh.outputs.missing_key }}
+          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          task = (tmp / 'dsh-task.txt').read_text(errors='replace') if (tmp / 'dsh-task.txt').exists() else ''
+          out = (tmp / 'dsh-output.txt').read_text(errors='replace') if (tmp / 'dsh-output.txt').exists() else ''
+          err = (tmp / 'dsh-error.txt').read_text(errors='replace') if (tmp / 'dsh-error.txt').exists() else ''
+          missing = os.environ.get('DSH_MISSING_KEY') == 'true'
+          try:
+              code = int(os.environ.get('DSH_EXIT_CODE') or 0)
+          except ValueError:
+              code = 1
+
+          if missing:
+              status = 'installed_no_api_key'
+          elif code == 0:
+              status = 'success'
+          else:
+              status = 'error'
+
+          result = {
+              'status': status,
+              'dsh_version': os.environ.get('DSH_VERSION'),
+              'exit_code': code,
+              'task': task[:20000],
+              'output': out[:100000],
+              'stderr': err[:50000],
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'sha': os.environ.get('GITHUB_SHA'),
+          }
+          Path('dsh-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+          PY
+
+      - name: Upload DSH result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-result-${{ github.run_id }}
+          path: dsh-result.json
+          retention-days: 7
+
+      - name: Persist compact result
+        if: always()
+        run: |
+          set -euo pipefail
+          git config user.name "runner-6-dsh-bot"
+          git config user.email "runner-6-dsh-bot@users.noreply.github.com"
+          git add dsh-result.json
+          git commit -m "Update DSH result [skip ci]" || exit 0
+          git pull --rebase origin main
+          git push
+
+      - name: Fail if DSH task failed
+        if: always()
+        env:
+          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+        run: |
+          CODE="${DSH_EXIT_CODE:-0}"
+          if [ "$CODE" != "0" ]; then
+            echo "DSH exited with code $CODE" >&2
+            exit "$CODE"
+          fi
