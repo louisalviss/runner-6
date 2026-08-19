@@ -1,0 +1,59 @@
+name: Deploy DSH Console v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-console/**"
+      - ".github/workflows/dsh-console-pages-v2.yml"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dsh-console-pages-v2
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mark deploy started
+        run: |
+          printf '{"status":"started","run_id":"%s","sha":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > /tmp/dsh-console-v2-status.json
+          git config user.name "runner-6-pages-v2-bot"
+          git config user.email "runner-6-pages-v2-bot@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/dsh-console-v2-status.json dsh-console-v2-status.json
+          git add dsh-console-v2-status.json
+          git commit -m "DSH Console v2 deploy started [skip ci]" || true
+          git push origin HEAD:main
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dsh-console
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Mark deploy result
+        if: always()
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          printf '{"status":"%s","run_id":"%s","sha":"%s","page_url":"%s"}\n' "$JOB_STATUS" "$GITHUB_RUN_ID" "$GITHUB_SHA" "$PAGE_URL" > /tmp/dsh-console-v2-status.json
+          git config user.name "runner-6-pages-v2-bot"
+          git config user.email "runner-6-pages-v2-bot@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/dsh-console-v2-status.json dsh-console-v2-status.json
+          git add dsh-console-v2-status.json
+          git commit -m "Update DSH Console v2 deploy result [skip ci]" || true
+          git push origin HEAD:main
