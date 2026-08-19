@@ -1,0 +1,30 @@
+name: Observe DSH Pages Live
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-pages-live-observer-trigger.txt"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read latest Pages v2 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/dsh-console-pages-v2.yml/runs?per_page=1" \
+            --jq '.workflow_runs[0] | {id,status,conclusion,head_sha,created_at,updated_at,html_url}' > "$RUNNER_TEMP/obs.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/obs.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-pages-live-observer.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-pages-live-observer.json" -f message='Update DSH Pages live observer [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-pages-live-observer.json" -f message='Update DSH Pages live observer [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
