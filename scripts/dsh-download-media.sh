@@ -37,19 +37,31 @@ COMMON=(
 )
 FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
 
+run_ytdlp() {
+  timeout --signal=TERM --kill-after=5s 120s "$YTDLP" "${COMMON[@]}" "$@" "$URL"
+}
+
 set +e
-OUT="$(timeout --signal=TERM --kill-after=5s 150s "$YTDLP" "${COMMON[@]}" -f "$FORMAT" "$URL")"
+OUT="$(run_ytdlp -f "$FORMAT")"
 CODE=$?
 set -e
 
-# YouTube can intermittently require a different public client because of
-# GVS/PO-token enforcement. Retry once with web_safari, whose HLS path may
-# remain available for public videos, then stop rather than looping.
+# Public YouTube fallback 1: web_embedded is an official yt-dlp player client
+# that may work for embeddable public videos without a PO token.
 if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
   set +e
-  OUT="$(timeout --signal=TERM --kill-after=5s 150s "$YTDLP" "${COMMON[@]}" \
-    --extractor-args 'youtube:player_client=web_safari' \
-    -f "best[height<=${HEIGHT}]/best" "$URL")"
+  OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' \
+    -f "best[height<=${HEIGHT}]/best")"
+  CODE=$?
+  set -e
+fi
+
+# Public YouTube fallback 2: web_safari may expose HLS formats that do not
+# require a GVS PO token. No account cookies or login are used.
+if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+  set +e
+  OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' \
+    -f "best[height<=${HEIGHT}]/best")"
   CODE=$?
   set -e
 fi
