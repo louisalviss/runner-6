@@ -81,7 +81,7 @@ jobs:
           rm -rf dsh-handoff .dsh-download-request.json
           mkdir -p dsh-handoff
           REQUEST="$(cat dsh-named-track-request.txt)"
-          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Resolve the canonical artist/title and choose the cleanest matching public source. You MUST search for an official artist, official label, or official Topic/auto-generated YouTube upload before accepting any repost. Prefer the canonical original version unless the request explicitly names a variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, source_channel, source_tier, verified_official, reason, evidence. source_tier MUST be exactly one of: official_artist, official_label, official_topic, repost, other. verified_official MUST be true only when the source is actually official artist/label/Topic. Finish with DSH_NAMED_TRACK_QUEUED."
+          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Match the requested title, artist, and requested version/variant. Any clean public source is acceptable; it does NOT need to be an official artist, label, or Topic upload. Prefer a source that clearly matches the requested audio and is usable by the existing downloader. Avoid wrong songs, wrong artists, remixes, slowed/sped versions, edits, compilations, reactions, or overlays unless the request explicitly asks for that variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, reason, evidence. Finish with DSH_NAMED_TRACK_QUEUED."
           START=$(date +%s)
           set +e
           timeout --signal=TERM --kill-after=10s 240s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-primary-output.txt" 2> "$RUNNER_TEMP/dsh-primary-error.txt"
@@ -104,19 +104,9 @@ jobs:
           ACCEPTED=false
           if [ "$PRIMARY_CODE" = "0" ] && [ -s dsh-handoff/selection.json ] && [ -s .dsh-download-request.json ]; then
             cp dsh-handoff/selection.json dsh-handoff/primary-selection.json
-            ACCEPTED="$(python - <<'PY'
-          import json
-          from pathlib import Path
-          s=json.loads(Path('dsh-handoff/selection.json').read_text())
-          tier=s.get('source_tier')
-          verified=s.get('verified_official') is True
-          url=str(s.get('selected_url',''))
-          ok=tier in {'official_artist','official_label','official_topic'} and verified and 'youtube.com/watch' in url
-          print('true' if ok else 'false')
-          PY
-            )"
+            ACCEPTED=true
+            USE_FALLBACK=false
           fi
-          if [ "$ACCEPTED" = "true" ]; then USE_FALLBACK=false; fi
           echo "accepted_primary=$ACCEPTED" >> "$GITHUB_OUTPUT"
           echo "use_fallback=$USE_FALLBACK" >> "$GITHUB_OUTPUT"
 
@@ -156,7 +146,7 @@ jobs:
           set -uo pipefail
           rm -f .dsh-download-request.json dsh-handoff/selection.json
           REQUEST="$(cat dsh-named-track-request.txt)"
-          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Resolve the canonical artist/title and choose the cleanest matching public source. You MUST search for an official artist, official label, or official Topic/auto-generated YouTube upload before accepting any repost. Prefer the canonical original version unless the request explicitly names a variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, source_channel, source_tier, verified_official, reason, evidence. source_tier MUST be exactly one of: official_artist, official_label, official_topic, repost, other. verified_official MUST reflect the real source. Finish with DSH_NAMED_TRACK_QUEUED."
+          TASK="Find the exact requested music track using the Playwright browser: $REQUEST. Do not substitute another song. Match the requested title, artist, and requested version/variant. Any clean public source is acceptable; it does NOT need to be an official artist, label, or Topic upload. Prefer a source that clearly matches the requested audio and is usable by the existing downloader. Avoid wrong songs, wrong artists, remixes, slowed/sped versions, edits, compilations, reactions, or overlays unless the request explicitly asks for that variant. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL \"artist - title\". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, reason, evidence. Finish with DSH_NAMED_TRACK_QUEUED."
           START=$(date +%s)
           set +e
           timeout --signal=TERM --kill-after=10s 240s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-fallback-output.txt" 2> "$RUNNER_TEMP/dsh-fallback-error.txt"
