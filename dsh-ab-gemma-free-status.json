@@ -1,0 +1,10 @@
+{
+  "run_id": "32313390989",
+  "model_label": "gemma-free",
+  "model_id": "google/gemma-4-31b-it:free",
+  "dsh_exit_code": "1",
+  "agent_seconds": 18,
+  "download_exit_code": "",
+  "download_seconds": 0,
+  "artifact_present": false
+}
