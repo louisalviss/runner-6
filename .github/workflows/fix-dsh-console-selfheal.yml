@@ -1,0 +1,69 @@
+name: Fix DSH Console Encryption Self-Heal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-console-selfheal-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dsh-console-selfheal
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch console
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('dsh-console/index.html')
+          s = path.read_text()
+
+          old = "function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(TOKEN_KEY)||'';render();paintEnc();const p=[...messages].reverse().find(m=>m.pending&&m.clientId);if(p){pendingLocalId=p.id;activeClientId=p.clientId;send.disabled=true;startPoll()}else refresh(true)}"
+          new = "async function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(TOKEN_KEY)||'';render();paintEnc();await syncPublishedEncryption();const p=[...messages].reverse().find(m=>m.pending&&m.clientId);if(p){pendingLocalId=p.id;activeClientId=p.clientId;send.disabled=true;startPoll()}else paintEnc()}"
+          assert old in s, 'load() target not found'
+          s = s.replace(old, new, 1)
+
+          old = "async function repoJson(path){const d=await api(`/contents/${path}?ref=${REF}&_=${Date.now()}`);return JSON.parse(decodeRepo64(d.content))}"
+          new = old + "\nasync function publicRepoJson(path){const r=await fetch(`${API}/contents/${path}?ref=${REF}&_=${Date.now()}`,{cache:'no-store',headers:{'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}});const txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d=txt}if(!r.ok)throw Error(d?.message||`GitHub HTTP ${r.status}`);return JSON.parse(decodeRepo64(d.content))}\nasync function syncPublishedEncryption(){try{const jwk=await publicRepoJson('dsh-public-key.json');if(!jwk||jwk.kty!=='RSA'||!jwk.n||!jwk.e)throw Error('Invalid published encryption key');await crypto.subtle.importKey('jwk',jwk,{name:'RSA-OAEP',hash:'SHA-256'},false,['encrypt']);localStorage.setItem(PUB,JSON.stringify(jwk));localStorage.setItem(READY,'1');paintEnc();return true}catch(e){paintEnc();return localStorage.getItem(READY)==='1'&&!!localStorage.getItem(PUB)}}"
+          assert old in s, 'repoJson() target not found'
+          s = s.replace(old, new, 1)
+
+          old = "function paintEnc(){const ok=localStorage.getItem(READY)==='1'&&!!localStorage.getItem(PUB);const p=$('encPill');p.textContent=ok?'Encryption configured':'Encryption not configured';p.className='statuspill'+(ok?' ok':'');$('state').textContent=ok?'Runner 6 · secure':'Runner 6 · setup required'}"
+          new = "function paintEnc(){const ok=localStorage.getItem(READY)==='1'&&!!localStorage.getItem(PUB);const p=$('encPill');p.textContent=ok?'Encryption configured':'Encryption not configured';p.className='statuspill'+(ok?' ok':'');const b=$('setupEnc');if(b)b.textContent=ok?'Rotate encryption key (advanced)':'Set up encryption manually';$('state').textContent=ok?'Runner 6 · secure':'Runner 6 · setup required'}"
+          assert old in s, 'paintEnc() target not found'
+          s = s.replace(old, new, 1)
+
+          old = "async function encryptTask(text){if(localStorage.getItem(READY)!=='1')throw Error('Set up encryption in Settings first.');const jwk=JSON.parse(localStorage.getItem(PUB)||'null');"
+          new = "async function encryptTask(text){if(localStorage.getItem(READY)!=='1'||!localStorage.getItem(PUB)){const ok=await syncPublishedEncryption();if(!ok)throw Error('Encryption key unavailable. Reload this page and try again.')}const jwk=JSON.parse(localStorage.getItem(PUB)||'null');"
+          assert old in s, 'encryptTask() target not found'
+          s = s.replace(old, new, 1)
+
+          old = "async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');paintStatus(s);if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId))return s;"
+          new = "async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId))return s;paintStatus(s);"
+          assert old in s, 'refresh() target not found'
+          s = s.replace(old, new, 1)
+
+          path.write_text(s)
+          print('patched', path, len(s))
+          PY
+
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name "runner-6-console-fix-bot"
+          git config user.email "runner-6-console-fix-bot@users.noreply.github.com"
+          git add dsh-console/index.html
+          git diff --cached --check
+          git commit -m "Fix DSH console encryption self-heal"
+          git push origin HEAD:main
