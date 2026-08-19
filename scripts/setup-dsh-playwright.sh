@@ -5,7 +5,9 @@ WORKSPACE="${1:-$PWD}"
 PW_VERSION="${PLAYWRIGHT_MCP_VERSION:-0.0.78}"
 PATCH_FILE="$DSH_HOME/cordis.patch.yml"
 
-mkdir -p "$DSH_HOME" "$WORKSPACE/dsh-handoff/browser"
+# Browser snapshots/logs are diagnostic output, not user deliverables.
+# Keep them outside dsh-handoff so artifact_present only means a real handoff.
+mkdir -p "$DSH_HOME" "$WORKSPACE/dsh-browser-debug" "$WORKSPACE/dsh-handoff"
 
 if [ -z "${PLAYWRIGHT_MCP_CLI:-}" ]; then
   PW_ROOT="$RUNNER_TEMP/playwright-mcp"
@@ -33,7 +35,7 @@ cat > "$PATCH_FILE" <<'YAML'
           - chrome
           - --no-sandbox
           - --output-dir
-          - !!js process.getBuiltinModule('node:path').join(process.cwd(), 'dsh-handoff', 'browser')
+          - !!js process.getBuiltinModule('node:path').join(process.cwd(), 'dsh-browser-debug')
         cwd: !!js process.cwd()
         env: {}
         toolCallTimeoutMs: 90000
