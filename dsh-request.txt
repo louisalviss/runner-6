@@ -1,2 +1,0 @@
-__SMOKE_TOOL__
-trigger=20260819-openrouter-1
