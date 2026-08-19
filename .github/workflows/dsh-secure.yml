@@ -1,4 +1,4 @@
-name: Runner 6 DSH Secure V2
+name: Runner 6 DSH Secure V3
 
 on:
   workflow_dispatch:
@@ -16,13 +16,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: runner-6-dsh-secure-v2
+  group: runner-6-dsh-secure
   cancel-in-progress: true
 
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     env:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
@@ -91,7 +91,7 @@ jobs:
             "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" > "$RUNNER_TEMP/status.json"
           C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
           S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-status.json?ref=main" --jq .sha 2>/dev/null || true)"
-          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v2 started [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v2 started [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
 
       - name: Configure OpenRouter
         if: steps.decrypt.outputs.ready == 'true'
@@ -142,7 +142,7 @@ jobs:
         if: steps.decrypt.outputs.ready == 'true'
         run: timeout 20s "$DSH_BIN" --version
 
-      - name: Run DSH
+      - name: Run DSH brain
         id: run_dsh
         if: steps.decrypt.outputs.ready == 'true'
         working-directory: workspace
@@ -160,7 +160,7 @@ jobs:
           fi
           TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
           set +e
-          timeout --signal=TERM --kill-after=10s 180s \
+          timeout --signal=TERM --kill-after=10s 210s \
             "$DSH_BIN" --profile headless "$TASK" \
             > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
           CODE=$?
@@ -170,18 +170,59 @@ jobs:
           if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
           unset TASK OPENROUTER_API_KEY
 
-      - name: Collect browser and media files
+      - name: Execute queued media download
+        id: download
+        if: steps.decrypt.outputs.ready == 'true'
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          REQ=.dsh-download-request.json
+          if [ ! -s "$REQ" ]; then
+            echo 'requested=false' >> "$GITHUB_OUTPUT"
+            echo 'status=none' >> "$GITHUB_OUTPUT"
+            echo 'exit_code=0' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('.dsh-download-request.json').read_text())
+          if p.get('v') != 1 or p.get('action') != 'download_media': raise SystemExit('invalid download request')
+          u=str(p.get('url',''))
+          if not u.startswith(('https://','http://')): raise SystemExit('invalid download URL')
+          h=int(p.get('max_height',720))
+          if h < 144 or h > 2160: raise SystemExit('invalid max height')
+          Path('.dsh-download-url.txt').write_text(u)
+          Path('.dsh-download-height.txt').write_text(str(h))
+          PY
+          URL="$(cat .dsh-download-url.txt)"
+          HEIGHT="$(cat .dsh-download-height.txt)"
+          echo 'requested=true' >> "$GITHUB_OUTPUT"
+          set +e
+          bash scripts/dsh-download-media.sh "$URL" "$HEIGHT" \
+            >"$RUNNER_TEMP/download-output.txt" 2>"$RUNNER_TEMP/download-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -eq 0 ] && [ -s dsh-handoff/handoff.json ]; then
+            echo 'status=success' >> "$GITHUB_OUTPUT"
+          else
+            echo 'status=failed' >> "$GITHUB_OUTPUT"
+          fi
+          rm -f .dsh-download-request.json .dsh-download-url.txt .dsh-download-height.txt
+
+      - name: Collect deliverable files
         id: media
         if: steps.decrypt.outputs.ready == 'true'
         run: |
           set -euo pipefail
           mkdir -p workspace/dsh-handoff
-          find workspace/dsh-handoff -type f -size +0c -print > "$RUNNER_TEMP/files.txt" || true
+          find workspace/dsh-handoff -type f -size +0c -print | sort > "$RUNNER_TEMP/files.txt" || true
           COUNT="$(wc -l < "$RUNNER_TEMP/files.txt" | tr -d ' ')"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           [ "$COUNT" -gt 0 ] && echo 'present=true' >> "$GITHUB_OUTPUT" || echo 'present=false' >> "$GITHUB_OUTPUT"
 
-      - name: Upload plain browser/media artifact
+      - name: Upload plain deliverable artifact
         if: steps.media.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -197,6 +238,9 @@ jobs:
           MISSING_KEY: ${{ steps.run_dsh.outputs.missing_key }}
           TIMED_OUT: ${{ steps.run_dsh.outputs.timed_out }}
           EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+          DOWNLOAD_REQUESTED: ${{ steps.download.outputs.requested }}
+          DOWNLOAD_STATUS: ${{ steps.download.outputs.status }}
+          DOWNLOAD_EXIT_CODE: ${{ steps.download.outputs.exit_code }}
           MEDIA_PRESENT: ${{ steps.media.outputs.present }}
           MEDIA_COUNT: ${{ steps.media.outputs.count }}
         run: |
@@ -205,16 +249,68 @@ jobs:
           import json, os
           from pathlib import Path
           t=Path(os.environ['RUNNER_TEMP'])
+          w=Path('workspace')
           out=(t/'dsh-output.txt').read_text(errors='replace') if (t/'dsh-output.txt').exists() else ''
           err=(t/'dsh-error.txt').read_text(errors='replace') if (t/'dsh-error.txt').exists() else ''
+          dlout=(t/'download-output.txt').read_text(errors='replace') if (t/'download-output.txt').exists() else ''
+          dlerr=(t/'download-error.txt').read_text(errors='replace') if (t/'download-error.txt').exists() else ''
           try: code=int(os.environ.get('EXIT_CODE') or 1)
           except: code=1
-          status='success'
-          if os.environ.get('MISSING_KEY')=='true': status='missing_openrouter_key'
-          elif os.environ.get('TIMED_OUT')=='true': status='timeout'
-          elif code!=0: status='error'
+          requested=os.environ.get('DOWNLOAD_REQUESTED')=='true'
+          dlstatus=os.environ.get('DOWNLOAD_STATUS') or 'none'
           media=os.environ.get('MEDIA_PRESENT')=='true'
-          result={'status':status,'output':out[:100000],'stderr':err[:50000],'exit_code':code,'run_id':os.environ['GITHUB_RUN_ID'],'client_id':(t/'client-id.txt').read_text().strip(),'browser':'playwright-mcp','runtime':'cached-dsh','artifact_present':media,'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),'artifact_name':f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if media else None,'artifact_encrypted':False}
+          handoff=None
+          hp=w/'dsh-handoff'/'handoff.json'
+          if hp.exists():
+            try: handoff=json.loads(hp.read_text())
+            except: handoff=None
+          files=[]
+          fp=t/'files.txt'
+          if fp.exists():
+            for line in fp.read_text().splitlines():
+              p=line.strip()
+              if p.startswith('workspace/'): p=p[len('workspace/'):]
+              if p: files.append(p)
+          if requested and dlstatus=='success' and media:
+            status='success'
+          elif requested and dlstatus!='success':
+            status='error'
+          elif os.environ.get('MISSING_KEY')=='true':
+            status='missing_openrouter_key'
+          elif os.environ.get('TIMED_OUT')=='true':
+            status='timeout'
+          elif code!=0:
+            status='error'
+          else:
+            status='success'
+          worker_note=''
+          if requested:
+            if dlstatus=='success':
+              worker_note='\n\nRunner download: success.'
+              if handoff:
+                worker_note += f"\nSource: {handoff.get('source_url','')}\nSaved: {handoff.get('relative_path','')}\nBytes: {handoff.get('bytes','')}"
+            else:
+              worker_note='\n\nRunner download: failed.'
+              if dlerr.strip(): worker_note += '\n' + dlerr.strip()[-4000:]
+          result={
+            'status':status,
+            'output':(out+worker_note)[:100000],
+            'stderr':err[:50000],
+            'exit_code':code,
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'client_id':(t/'client-id.txt').read_text().strip(),
+            'browser':'playwright-mcp',
+            'runtime':'cached-dsh',
+            'download_requested':requested,
+            'download_status':dlstatus,
+            'download_exit_code':int(os.environ.get('DOWNLOAD_EXIT_CODE') or 0),
+            'handoff':handoff,
+            'artifact_present':media,
+            'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),
+            'artifact_files':files,
+            'artifact_name':f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if media else None,
+            'artifact_encrypted':False
+          }
           (t/'result.json').write_text(json.dumps(result,ensure_ascii=False,separators=(',',':')))
           (t/'final-status.txt').write_text(status)
           PY
@@ -240,9 +336,9 @@ jobs:
           printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":%s,"artifact_encrypted":false}\n' \
             "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" > "$RUNNER_TEMP/status.json"
           put(){ P="$1"; F="$2"; M="$3"; C="$(base64 -w0 "$F")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"; if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f branch=main >/dev/null; fi; }
-          [ -f "$RUNNER_TEMP/result.enc.json" ] && put dsh-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted DSH v2 result [skip ci]'
-          put dsh-status.json "$RUNNER_TEMP/status.json" 'Update safe DSH v2 status [skip ci]'
-          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/request.enc" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt"
+          [ -f "$RUNNER_TEMP/result.enc.json" ] && put dsh-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted DSH v3 result [skip ci]'
+          put dsh-status.json "$RUNNER_TEMP/status.json" 'Update safe DSH v3 status [skip ci]'
+          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/request.enc" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt" "$RUNNER_TEMP/download-output.txt" "$RUNNER_TEMP/download-error.txt"
 
       - name: Validate
         if: always()
@@ -251,5 +347,5 @@ jobs:
         run: |
           [ "${DECRYPT_READY:-false}" = true ] || { echo 'Secure decrypt failed'; exit 1; }
           STATUS="$(cat "$RUNNER_TEMP/final-status.txt" 2>/dev/null || printf error)"
-          [ "$STATUS" = success ] || { echo "DSH secure v2 failed: $STATUS"; exit 1; }
+          [ "$STATUS" = success ] || { echo "DSH secure v3 failed: $STATUS"; exit 1; }
           echo success
