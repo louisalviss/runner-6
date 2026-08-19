@@ -19,5 +19,12 @@ ln -sf "$BIN" "$LOCAL_BIN/yt-dlp"
 printf '%s\n' "$LOCAL_BIN" >> "$GITHUB_PATH"
 printf 'YTDLP_BIN=%s\n' "$LOCAL_BIN/yt-dlp" >> "$GITHUB_ENV"
 
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq ffmpeg >/dev/null
+fi
+command -v ffmpeg >/dev/null 2>&1 || { echo 'ffmpeg setup failed' >&2; exit 3; }
+
 "$BIN" --version
+ffmpeg -version | head -n 1
 node --version
