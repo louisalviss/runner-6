@@ -1,0 +1,59 @@
+name: Prime DSH Runtime Cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prime-dsh-runtime-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  prime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Restore runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          save-always: true
+      - name: Install runtime
+        run: bash workspace/scripts/setup-dsh-runtime.sh
+      - name: Verify DSH binary
+        run: timeout 30s "$DSH_BIN" --version | tee "$RUNNER_TEMP/version.txt"
+      - name: Publish primer status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OK=false; [ -s "$RUNNER_TEMP/version.txt" ] && OK=true
+          VERSION="$(tr -d '\r\n' < "$RUNNER_TEMP/version.txt" 2>/dev/null || true)"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          ok=os.environ.get('OK')=='true'
+          Path(os.environ['RUNNER_TEMP'],'status.json').write_text(json.dumps({'status':'success' if ok else 'error','run_id':os.environ['GITHUB_RUN_ID'],'version':os.environ.get('VERSION',''),'cache_key':'runner6-dsh-runtime-Linux-rc7-pwmcp078-v1'},separators=(',',':')))
+          PY
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='Update DSH runtime cache status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-runtime-cache-status.json" -f message='Update DSH runtime cache status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OK: ${{ job.status == 'success' && 'true' || 'false' }}
+          VERSION: ""
