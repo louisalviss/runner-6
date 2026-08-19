@@ -16,7 +16,7 @@ concurrency:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     env:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
@@ -103,7 +103,7 @@ jobs:
                   - id: deepseek/deepseek-v4-pro
                     name: DeepSeek V4 Pro
                     contextWindow: 1000000
-                    maxTokens: 32768
+                    maxTokens: 16384
                     input: [text]
           agent-default-model:
             provider: openrouter-v4
@@ -132,12 +132,14 @@ jobs:
           fi
           TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
           set +e
-          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
+          timeout --signal=TERM --kill-after=10s 600s \
+            npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
             > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
           CODE=$?
           set -e
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
           unset TASK OPENROUTER_API_KEY
 
       - name: Collect new media
@@ -153,13 +155,22 @@ jobs:
           cutoff=marker.stat().st_mtime if marker.exists() else 0
           exts={'.mp4','.mov','.mkv','.webm','.m4v','.avi','.mpg','.mpeg','.mp3','.wav','.m4a','.aac','.flac','.ogg','.png','.jpg','.jpeg','.webp','.gif','.zip','.7z','.tar','.gz','.tgz'}
           found=[]
-          for p in root.rglob('*'):
+          preferred=root/'dsh-handoff'
+          candidates=[]
+          if preferred.exists(): candidates.extend(preferred.rglob('*'))
+          candidates.extend(root.rglob('*'))
+          seen=set()
+          for p in candidates:
               try:
+                  rp=p.resolve()
+                  if rp in seen: continue
+                  seen.add(rp)
                   if not p.is_file() or '.git' in p.parts or p.suffix.lower() not in exts: continue
                   if p.stat().st_mtime + 0.001 < cutoff: continue
+                  if p.stat().st_size <= 0: continue
                   found.append(p)
               except OSError: pass
-          found.sort()
+          found.sort(key=lambda p: (0 if 'dsh-handoff' in p.parts else 1, str(p)))
           listing=Path(os.environ['RUNNER_TEMP'])/'handoff-files.txt'
           with listing.open('w') as f:
               for p in found: f.write(str(p.relative_to(root))+'\n')
@@ -196,6 +207,7 @@ jobs:
         env:
           MISSING_KEY: ${{ steps.run_dsh.outputs.missing_key }}
           EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+          TIMED_OUT: ${{ steps.run_dsh.outputs.timed_out }}
           MEDIA_PRESENT: ${{ steps.media.outputs.present }}
           MEDIA_COUNT: ${{ steps.media.outputs.count }}
         run: |
@@ -210,6 +222,7 @@ jobs:
           except: code=1
           status='success'
           if os.environ.get('MISSING_KEY')=='true': status='missing_openrouter_key'
+          elif os.environ.get('TIMED_OUT')=='true': status='timeout'
           elif code!=0: status='error'
           present=os.environ.get('MEDIA_PRESENT')=='true'
           result={'status':status,'output':out[:100000],'stderr':err[:50000],'exit_code':code,'run_id':os.environ['GITHUB_RUN_ID'],'client_id':(tmp/'client-id.txt').read_text().strip(),'artifact_present':present,'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),'artifact_name':f"dsh-handoff-{os.environ['GITHUB_RUN_ID']}" if present else None}
