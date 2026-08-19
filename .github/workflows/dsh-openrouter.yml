@@ -1,0 +1,204 @@
+name: Runner 6 DSH OpenRouter
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "One-shot task for DSH"
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/dsh-openrouter.yml"
+      - "dsh-request.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-openrouter
+  cancel-in-progress: true
+
+jobs:
+  dsh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      DSH_PROVIDER: "openrouter-v4"
+      DSH_MODEL: "deepseek/deepseek-v4-pro"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Set runtime paths
+        run: |
+          echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Resolve task
+        env:
+          INPUT_TASK: ${{ github.event.inputs.task }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TASK:-}" ]; then
+            printf '%s\n' "$INPUT_TASK" > "$RUNNER_TEMP/dsh-task.txt"
+          elif [ -f dsh-request.txt ]; then
+            cp dsh-request.txt "$RUNNER_TEMP/dsh-task.txt"
+          else
+            printf '%s\n' 'Reply exactly: DSH_OK' > "$RUNNER_TEMP/dsh-task.txt"
+          fi
+
+          if grep -qx '__SMOKE_TOOL__' "$RUNNER_TEMP/dsh-task.txt"; then
+            TOKEN="DSH_TOOL_OK_$(python -c 'import secrets; print(secrets.token_hex(16))')"
+            printf '%s\n' "$TOKEN" > dsh-probe.txt
+            printf '%s\n' "$TOKEN" > "$RUNNER_TEMP/dsh-expected.txt"
+            printf '%s\n' 'Use an available filesystem-reading tool to read dsh-probe.txt in the current workspace. You must inspect the file. Reply with exactly the file contents and nothing else.' > "$RUNNER_TEMP/dsh-task.txt"
+          fi
+
+      - name: Publish run marker
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/dsh-status-new.json').write_text(json.dumps({
+              'status': 'started',
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'sha': os.environ['GITHUB_SHA'],
+              'provider': os.environ['DSH_PROVIDER'],
+              'model': os.environ['DSH_MODEL'],
+          }, indent=2) + '\n')
+          PY
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/dsh-status-new.json dsh-status.json
+          git config user.name "runner-6-dsh-bot"
+          git config user.email "runner-6-dsh-bot@users.noreply.github.com"
+          git add dsh-status.json
+          git commit -m "DSH OpenRouter run started [skip ci]" || exit 0
+          git push origin HEAD:main
+
+      - name: Configure DSH OpenRouter
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 32768
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Run DSH
+        id: run_dsh
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            printf '%s\n' 'OPENROUTER_API_KEY repository secret is missing.' > "$RUNNER_TEMP/dsh-output.txt"
+            : > "$RUNNER_TEMP/dsh-error.txt"
+            echo 'missing_key=true' >> "$GITHUB_OUTPUT"
+            echo 'exit_code=3' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
+          set +e
+          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          echo 'missing_key=false' >> "$GITHUB_OUTPUT"
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build result
+        if: always()
+        env:
+          MISSING_KEY: ${{ steps.run_dsh.outputs.missing_key }}
+          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          out = (tmp/'dsh-output.txt').read_text(errors='replace') if (tmp/'dsh-output.txt').exists() else ''
+          err = (tmp/'dsh-error.txt').read_text(errors='replace') if (tmp/'dsh-error.txt').exists() else ''
+          task = (tmp/'dsh-task.txt').read_text(errors='replace') if (tmp/'dsh-task.txt').exists() else ''
+          expected = (tmp/'dsh-expected.txt').read_text(errors='replace').strip() if (tmp/'dsh-expected.txt').exists() else None
+          try:
+              code = int(os.environ.get('DSH_EXIT_CODE') or 1)
+          except ValueError:
+              code = 1
+          passed = expected is not None and out.strip() == expected
+          if os.environ.get('MISSING_KEY') == 'true':
+              status = 'missing_openrouter_key'
+          elif code != 0:
+              status = 'error'
+          elif expected is not None and passed:
+              status = 'success_tool_smoke'
+          elif expected is not None:
+              status = 'tool_smoke_mismatch'
+          else:
+              status = 'success'
+          result = {
+              'status': status,
+              'provider': os.environ['DSH_PROVIDER'],
+              'model': os.environ['DSH_MODEL'],
+              'dsh_version': os.environ['DSH_VERSION'],
+              'exit_code': code,
+              'tool_smoke': expected is not None,
+              'tool_smoke_passed': passed,
+              'task': task[:20000],
+              'output': out[:100000],
+              'stderr': err[:50000],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'sha': os.environ['GITHUB_SHA'],
+          }
+          Path('/tmp/dsh-result-new.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+          Path('/tmp/dsh-status-new.json').write_text(json.dumps({k: result[k] for k in ('status','run_id','sha','provider','model','exit_code','tool_smoke_passed')}, indent=2) + '\n')
+          PY
+
+      - name: Persist result
+        if: always()
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          cp /tmp/dsh-result-new.json dsh-result.json
+          cp /tmp/dsh-status-new.json dsh-status.json
+          git config user.name "runner-6-dsh-bot"
+          git config user.email "runner-6-dsh-bot@users.noreply.github.com"
+          git add dsh-result.json dsh-status.json
+          git commit -m "Update DSH OpenRouter result [skip ci]" || exit 0
+          git push origin HEAD:main
+
+      - name: Validate
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          r = json.loads(Path('dsh-result.json').read_text())
+          if r['status'] not in {'success','success_tool_smoke'}:
+              raise SystemExit(f"DSH validation failed: {r['status']}")
+          print(r['status'])
+          PY
