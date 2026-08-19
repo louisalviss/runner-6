@@ -79,10 +79,39 @@ printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/netns/dshvpn/r
 
 mkdir -p dsh-handoff/downloads
 FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
+HLS_FORMAT="best[height<=${HEIGHT}][protocol^=m3u8]/best[height<=${HEIGHT}]/best"
 : > "$ROOT/attempts.tsv"
 
 run_in_vpn() {
   sudo ip netns exec dshvpn sudo -u "$USER" env HOME="$HOME" PATH="$PATH" "$@"
+}
+
+try_download() {
+  local label="$1"; shift
+  local fmt="$1"; shift
+  local err="$ROOT/ytdlp-${label}.err"
+  : > "$err"
+  rm -f dsh-handoff/downloads/*.part dsh-handoff/downloads/*.ytdl 2>/dev/null || true
+  set +e
+  local out
+  out="$(run_in_vpn "$TIMEOUT_BIN" --signal=TERM --kill-after=5s 75s \
+    "$YTDLP" --js-runtimes "node:$NODE_BIN" --no-playlist --restrict-filenames \
+    --socket-timeout 15 --retries 1 --fragment-retries 1 --max-filesize 250M \
+    -P dsh-handoff/downloads -o '%(title).100s_[%(id)s].%(ext)s' \
+    --print 'after_move:filepath' "$@" -f "$fmt" "$URL" 2>"$err")"
+  local code=$?
+  set -e
+  printf '%s\t%s\n' "$label" "$code" >> "$ROOT/client-attempts.tsv"
+  if [ "$code" -eq 0 ]; then
+    local candidate
+    candidate="$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1)"
+    if [ -n "$candidate" ] && [ -s "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  tail -n 3 "$err" >&2 || true
+  return 1
 }
 
 success=0
@@ -106,7 +135,7 @@ while IFS=$'\t' read -r cfg country relay; do
   fi
 
   exitip="$(sudo ip netns exec dshvpn curl -fsS --connect-timeout 5 --max-time 8 https://api.ipify.org || true)"
-  ERR="$ROOT/ytdlp.err"; : > "$ERR"
+  ERR="$ROOT/ytdlp-probe.err"; : > "$ERR"
 
   set +e
   run_in_vpn "$TIMEOUT_BIN" --signal=TERM --kill-after=3s 25s \
@@ -122,32 +151,33 @@ while IFS=$'\t' read -r cfg country relay; do
   fi
 
   echo "VPN_PROBE_OK country=$country exit_ip=$exitip" >&2
-  rm -f dsh-handoff/downloads/*.part dsh-handoff/downloads/*.ytdl 2>/dev/null || true
-  : > "$ERR"
-  set +e
-  OUT="$(run_in_vpn "$TIMEOUT_BIN" --signal=TERM --kill-after=5s 120s \
-    "$YTDLP" --js-runtimes "node:$NODE_BIN" --no-playlist --restrict-filenames \
-    --socket-timeout 15 --retries 1 --fragment-retries 1 --max-filesize 250M \
-    -P dsh-handoff/downloads -o '%(title).100s_[%(id)s].%(ext)s' \
-    --print 'after_move:filepath' -f "$FORMAT" "$URL" 2>"$ERR")"
-  code=$?
-  set -e
-  printf '%s\t%s\t%s\tDOWNLOAD_%s\n' "$country" "$relay" "$exitip" "$code" >> "$ROOT/attempts.tsv"
-  if [ "$code" -eq 0 ]; then
-    candidate="$(printf '%s\n' "$OUT" | sed '/^[[:space:]]*$/d' | tail -n 1)"
-    if [ -n "$candidate" ] && [ -s "$candidate" ]; then
-      final="$candidate"; success=1
-      echo "VPN_OK country=$country exit_ip=$exitip" >&2
-      break
-    fi
+  : > "$ROOT/client-attempts.tsv"
+
+  # Client chain is attempted only after a relay passes metadata probe.
+  # web_safari may expose HLS media where the default GVS URL returns 403;
+  # web_embedded is a second public-client fallback. No login/cookies are used.
+  if final="$(try_download default "$FORMAT")"; then
+    success=1
+  elif final="$(try_download safari "$HLS_FORMAT" --extractor-args 'youtube:player_client=web_safari')"; then
+    success=1
+  elif final="$(try_download embedded "$FORMAT" --extractor-args 'youtube:player_client=web_embedded')"; then
+    success=1
   fi
-  tail -n 3 "$ERR" >&2 || true
+
+  if [ "$success" = 1 ]; then
+    printf '%s\t%s\t%s\tDOWNLOAD_OK\n' "$country" "$relay" "$exitip" >> "$ROOT/attempts.tsv"
+    echo "VPN_OK country=$country exit_ip=$exitip" >&2
+    break
+  fi
+
+  summary="$(tr '\n' ',' < "$ROOT/client-attempts.tsv" | sed 's/,$//')"
+  printf '%s\t%s\t%s\tCLIENTS_%s\n' "$country" "$relay" "$exitip" "$summary" >> "$ROOT/attempts.tsv"
 done < "$ROOT/relays.tsv"
 
 sudo ip netns exec dshvpn pkill openvpn 2>/dev/null || true
 
 if [ "$success" != 1 ]; then
-  echo 'VPNGate downloader exhausted bounded relay pool' >&2
+  echo 'VPNGate downloader exhausted bounded relay/client pool' >&2
   cat "$ROOT/attempts.tsv" >&2
   exit 1
 fi
