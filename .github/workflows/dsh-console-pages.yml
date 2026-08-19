@@ -1,84 +1,11 @@
-name: Deploy DSH Console
+name: Deploy DSH Console Legacy (disabled)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "dsh-console/**"
-      - ".github/workflows/dsh-console-pages.yml"
-
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-
-concurrency:
-  group: dsh-console-pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  disabled:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Publish deploy marker
-        run: |
-          set -euo pipefail
-          cat > /tmp/dsh-console-deploy-status.json <<EOF
-          {
-            "status": "started",
-            "run_id": "${GITHUB_RUN_ID}",
-            "sha": "${GITHUB_SHA}"
-          }
-          EOF
-          git fetch origin main
-          git reset --hard origin/main
-          cp /tmp/dsh-console-deploy-status.json dsh-console-deploy-status.json
-          git config user.name "runner-6-pages-bot"
-          git config user.email "runner-6-pages-bot@users.noreply.github.com"
-          git add dsh-console-deploy-status.json
-          git commit -m "DSH Console deploy started [skip ci]" || true
-          git push origin HEAD:main
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload console
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: dsh-console
-
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-      - name: Publish deploy result
-        if: always()
-        env:
-          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          set -euo pipefail
-          cat > /tmp/dsh-console-deploy-status.json <<EOF
-          {
-            "status": "${JOB_STATUS}",
-            "run_id": "${GITHUB_RUN_ID}",
-            "sha": "${GITHUB_SHA}",
-            "page_url": "${PAGE_URL}"
-          }
-          EOF
-          git fetch origin main
-          git reset --hard origin/main
-          cp /tmp/dsh-console-deploy-status.json dsh-console-deploy-status.json
-          git config user.name "runner-6-pages-bot"
-          git config user.email "runner-6-pages-bot@users.noreply.github.com"
-          git add dsh-console-deploy-status.json
-          git commit -m "Update DSH Console deploy result [skip ci]" || true
-          git push origin HEAD:main
-
-# redeploy realtime response fix
+      - run: echo "Disabled. Use dsh-console-pages-v2.yml."
