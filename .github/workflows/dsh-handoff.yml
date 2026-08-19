@@ -21,6 +21,7 @@ jobs:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: openrouter-v4
       DSH_MODEL: deepseek/deepseek-v4-pro
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
     steps:
       - name: Checkout without credentials
@@ -74,7 +75,7 @@ jobs:
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt" 2>/dev/null || printf unknown)"
           STATUS="${{ steps.decrypt.outputs.status }}"
           [ "${{ steps.decrypt.outputs.ready }}" = 'true' ] && STATUS=started
-          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":false}\n' \
+          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":false,"browser":"playwright-mcp"}\n' \
             "$STATUS" "$GITHUB_RUN_ID" "$CLIENT_ID" "$DSH_PROVIDER" "$DSH_MODEL" > "$RUNNER_TEMP/handoff-status.json"
           CONTENT="$(base64 -w0 "$RUNNER_TEMP/handoff-status.json")"
           SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-handoff-status.json?ref=main" --jq .sha 2>/dev/null || true)"
@@ -110,6 +111,62 @@ jobs:
             model: deepseek/deepseek-v4-pro
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Cache Playwright Chromium
+        if: steps.decrypt.outputs.ready == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-mcp-${{ runner.os }}-0.0.78-chromium
+
+      - name: Install Playwright MCP and Chromium
+        if: steps.decrypt.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          PW_ROOT="$RUNNER_TEMP/playwright-mcp"
+          mkdir -p "$PW_ROOT"
+          npm install --prefix "$PW_ROOT" --no-audit --no-fund "@playwright/mcp@$PLAYWRIGHT_MCP_VERSION"
+          node "$PW_ROOT/node_modules/playwright/cli.js" install-deps chromium
+          node "$PW_ROOT/node_modules/playwright/cli.js" install chromium
+          test -f "$PW_ROOT/node_modules/@playwright/mcp/cli.js"
+          echo "PLAYWRIGHT_MCP_CLI=$PW_ROOT/node_modules/@playwright/mcp/cli.js" >> "$GITHUB_ENV"
+
+      - name: Add Playwright MCP to headless profile
+        if: steps.decrypt.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME/profiles/headless" workspace/dsh-handoff/browser
+          cat > "$DSH_HOME/profiles/headless/cordis.patch.yml" <<'YAML'
+          - insert:
+              - id: browser-playwright-mcp
+                name: '@deepseek-ai/dsh-mcp-client'
+                config:
+                  serverName: browser
+                  transport: stdio
+                  command: node
+                  args:
+                    - !!js process.env.PLAYWRIGHT_MCP_CLI
+                    - --headless
+                    - --browser
+                    - chromium
+                    - --no-sandbox
+                    - --output-dir
+                    - !!js process.getBuiltinModule('node:path').join(process.cwd(), 'dsh-handoff', 'browser')
+                  cwd: !!js process.cwd()
+                  env: {}
+                  toolCallTimeoutMs: 90000
+                  failOnStartupError: true
+          YAML
+
+      - name: Validate DSH browser composition
+        if: steps.decrypt.outputs.ready == 'true'
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless --dump-config > "$RUNNER_TEMP/dsh-browser-config.txt"
+          grep -q 'browser-playwright-mcp' "$RUNNER_TEMP/dsh-browser-config.txt"
+          grep -q '@deepseek-ai/dsh-mcp-client' "$RUNNER_TEMP/dsh-browser-config.txt"
+          rm -f "$RUNNER_TEMP/dsh-browser-config.txt"
 
       - name: Mark artifact scan start
         if: steps.decrypt.outputs.ready == 'true'
@@ -154,36 +211,28 @@ jobs:
           python - <<'PY'
           import json, os, shutil
           from pathlib import Path
-
           root = Path('workspace').resolve()
           tmp = Path(os.environ['RUNNER_TEMP'])
           marker = tmp / 'dsh-run-start.marker'
           cutoff = marker.stat().st_mtime if marker.exists() else 0
           stage = tmp / 'dsh-media'
           stage.mkdir(parents=True, exist_ok=True)
-          exts = {'.mp4','.mov','.mkv','.webm','.m4v','.avi','.mpg','.mpeg','.mp3','.wav','.m4a','.aac','.flac','.ogg','.png','.jpg','.jpeg','.webp','.gif','.zip','.7z','.tar','.gz','.tgz'}
-
+          exts = {'.mp4','.mov','.mkv','.webm','.m4v','.avi','.mpg','.mpeg','.mp3','.wav','.m4a','.aac','.flac','.ogg','.png','.jpg','.jpeg','.webp','.gif','.zip','.7z','.tar','.gz','.tgz','.pdf'}
           found = []
           preferred = root / 'dsh-handoff'
           candidates = []
-          if preferred.exists():
-              candidates.extend(preferred.rglob('*'))
+          if preferred.exists(): candidates.extend(preferred.rglob('*'))
           candidates.extend(root.rglob('*'))
           seen = set()
           for p in candidates:
               try:
                   rp = p.resolve()
-                  if rp in seen:
-                      continue
+                  if rp in seen: continue
                   seen.add(rp)
-                  if not p.is_file() or '.git' in p.parts or p.suffix.lower() not in exts:
-                      continue
-                  if p.stat().st_mtime + 0.001 < cutoff or p.stat().st_size <= 0:
-                      continue
+                  if not p.is_file() or '.git' in p.parts or p.suffix.lower() not in exts: continue
+                  if p.stat().st_mtime + 0.001 < cutoff or p.stat().st_size <= 0: continue
                   found.append(p)
-              except OSError:
-                  pass
-
+              except OSError: pass
           found.sort(key=lambda p: (0 if 'dsh-handoff' in p.parts else 1, str(p)))
           manifest = {'count': len(found), 'files': []}
           for p in found:
@@ -192,18 +241,13 @@ jobs:
               dest.parent.mkdir(parents=True, exist_ok=True)
               shutil.copy2(p, dest)
               manifest['files'].append({'path': str(rel), 'size': p.stat().st_size})
-
           (stage / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')))
           (tmp / 'handoff-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')))
           print(len(found))
           PY
           COUNT="$(python -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"handoff-manifest.json")))["count"])')"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-          if [ "$COUNT" = 0 ]; then
-            echo 'present=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          fi
+          if [ "$COUNT" = 0 ]; then echo 'present=false' >> "$GITHUB_OUTPUT"; else echo 'present=true' >> "$GITHUB_OUTPUT"; fi
 
       - name: Upload media handoff
         if: steps.media.outputs.present == 'true'
@@ -231,39 +275,19 @@ jobs:
           tmp = Path(os.environ['RUNNER_TEMP'])
           out = (tmp/'dsh-output.txt').read_text(errors='replace') if (tmp/'dsh-output.txt').exists() else ''
           err = (tmp/'dsh-error.txt').read_text(errors='replace') if (tmp/'dsh-error.txt').exists() else ''
-          try:
-              code = int(os.environ.get('EXIT_CODE') or 1)
-          except Exception:
-              code = 1
+          try: code = int(os.environ.get('EXIT_CODE') or 1)
+          except Exception: code = 1
           status = 'success'
-          if os.environ.get('MISSING_KEY') == 'true':
-              status = 'missing_openrouter_key'
-          elif os.environ.get('TIMED_OUT') == 'true':
-              status = 'timeout'
-          elif code != 0:
-              status = 'error'
+          if os.environ.get('MISSING_KEY') == 'true': status = 'missing_openrouter_key'
+          elif os.environ.get('TIMED_OUT') == 'true': status = 'timeout'
+          elif code != 0: status = 'error'
           present = os.environ.get('MEDIA_PRESENT') == 'true'
-          result = {
-              'status': status,
-              'output': out[:100000],
-              'stderr': err[:50000],
-              'exit_code': code,
-              'run_id': os.environ['GITHUB_RUN_ID'],
-              'client_id': (tmp/'client-id.txt').read_text().strip(),
-              'artifact_present': present,
-              'artifact_count': int(os.environ.get('MEDIA_COUNT') or 0),
-              'artifact_name': f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if present else None,
-              'artifact_encrypted': False,
-          }
+          result = {'status':status,'output':out[:100000],'stderr':err[:50000],'exit_code':code,'run_id':os.environ['GITHUB_RUN_ID'],'client_id':(tmp/'client-id.txt').read_text().strip(),'artifact_present':present,'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),'artifact_name':f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if present else None,'artifact_encrypted':False,'browser':'playwright-mcp'}
           (tmp/'handoff-result.json').write_text(json.dumps(result, ensure_ascii=False, separators=(',', ':')))
           (tmp/'final-status.txt').write_text(status)
           PY
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt")"
-          node workspace/scripts/dsh-handoff-crypto.mjs encrypt-json \
-            "$RUNNER_TEMP/handoff-result.json" \
-            "$RUNNER_TEMP/dsh-session-key.b64" \
-            "$RUNNER_TEMP/dsh-handoff-result.enc.json" \
-            "$CLIENT_ID" "$GITHUB_RUN_ID"
+          node workspace/scripts/dsh-handoff-crypto.mjs encrypt-json "$RUNNER_TEMP/handoff-result.json" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/dsh-handoff-result.enc.json" "$CLIENT_ID" "$GITHUB_RUN_ID"
           rm -f "$RUNNER_TEMP/handoff-result.json"
 
       - name: Publish encrypted result and safe final status
@@ -277,22 +301,14 @@ jobs:
           set -euo pipefail
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt" 2>/dev/null || printf unknown)"
           STATUS="${DECRYPT_STATUS:-error}"
-          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then
-            STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"
-          fi
-          ART=false
-          [ "${MEDIA_PRESENT:-false}" = 'true' ] && ART=true
-          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":%s,"artifact_encrypted":false}\n' \
-            "$STATUS" "$GITHUB_RUN_ID" "$CLIENT_ID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" > "$RUNNER_TEMP/handoff-status.json"
+          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"; fi
+          ART=false; [ "${MEDIA_PRESENT:-false}" = 'true' ] && ART=true
+          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":%s,"artifact_encrypted":false,"browser":"playwright-mcp"}\n' "$STATUS" "$GITHUB_RUN_ID" "$CLIENT_ID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" > "$RUNNER_TEMP/handoff-status.json"
           put_file() {
             local path="$1" file="$2" msg="$3" content sha
             content="$(base64 -w0 "$file")"
             sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=main" --jq .sha 2>/dev/null || true)"
-            if [ -n "$sha" ]; then
-              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f sha="$sha" -f branch=main >/dev/null
-            else
-              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f branch=main >/dev/null
-            fi
+            if [ -n "$sha" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f sha="$sha" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f branch=main >/dev/null; fi
           }
           [ -f "$RUNNER_TEMP/dsh-handoff-result.enc.json" ] && put_file dsh-handoff-result.enc.json "$RUNNER_TEMP/dsh-handoff-result.enc.json" 'Update encrypted DSH handoff result [skip ci]'
           put_file dsh-handoff-status.json "$RUNNER_TEMP/handoff-status.json" 'Update safe DSH handoff status [skip ci]'
