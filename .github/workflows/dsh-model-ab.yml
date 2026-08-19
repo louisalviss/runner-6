@@ -7,7 +7,7 @@ on:
       - "dsh-model-ab-trigger.txt"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   compare:
@@ -40,8 +40,6 @@ jobs:
       - name: Runtime paths
         run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home-${MODEL_LABEL}" >> "$GITHUB_ENV"
       - name: Configure OpenRouter model
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "$DSH_HOME"
@@ -136,6 +134,7 @@ jobs:
           import json, os
           from pathlib import Path
           result={
+            'run_id':os.environ['GITHUB_RUN_ID'],
             'model_label':os.environ['MODEL_LABEL'],
             'model_id':os.environ['MODEL_ID'],
             'dsh_exit_code':os.environ.get('DSH_CODE',''),
@@ -156,6 +155,21 @@ jobs:
           PY
           cp "$RUNNER_TEMP/dsh-output.txt" dsh-handoff/dsh-output.txt || true
           cp "$RUNNER_TEMP/dsh-error.txt" dsh-handoff/dsh-error.txt || true
+      - name: Publish matrix status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          F="dsh-ab-${MODEL_LABEL}-status.json"
+          C="$(base64 -w0 dsh-handoff/ab-result.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message="Update DSH A/B ${MODEL_LABEL} status [skip ci]" -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message="Update DSH A/B ${MODEL_LABEL} status [skip ci]" -f content="$C" -f branch=main >/dev/null
+          fi
       - name: Upload A/B result
         if: always()
         uses: actions/upload-artifact@v4
