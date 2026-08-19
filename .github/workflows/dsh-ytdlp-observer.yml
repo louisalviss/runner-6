@@ -1,0 +1,30 @@
+name: Observe DSH yt-dlp Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-ytdlp-observer-trigger.txt"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read latest yt-dlp smoke run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/dsh-ytdlp-smoke.yml/runs?per_page=1" \
+            --jq '.workflow_runs[0] | {id,status,conclusion,created_at,updated_at,head_sha}' > "$RUNNER_TEMP/obs.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/obs.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-observer.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-observer.json" -f message='Update yt-dlp observer [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-observer.json" -f message='Update yt-dlp observer [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
