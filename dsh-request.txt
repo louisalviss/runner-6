@@ -1,1 +1,1 @@
-Reply exactly: DSH_OK. Do not add anything else.
+__SMOKE_TOOL__
