@@ -19,8 +19,8 @@ jobs:
     timeout-minutes: 15
     env:
       DSH_VERSION: "0.1.0-rc.7"
-      DSH_PROVIDER: "openrouter-v4"
-      DSH_MODEL: "deepseek/deepseek-v4-pro"
+      DSH_PROVIDER: openrouter-v4
+      DSH_MODEL: deepseek/deepseek-v4-pro
 
     steps:
       - name: Checkout without credentials
@@ -139,7 +139,11 @@ jobs:
           set -e
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
-          if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
+          if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then
+            echo 'timed_out=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'timed_out=false' >> "$GITHUB_OUTPUT"
+          fi
           unset TASK OPENROUTER_API_KEY
 
       - name: Collect new media
@@ -148,56 +152,65 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os
+          import json, os, shutil
           from pathlib import Path
-          root=Path('workspace').resolve()
-          marker=Path(os.environ['RUNNER_TEMP'])/'dsh-run-start.marker'
-          cutoff=marker.stat().st_mtime if marker.exists() else 0
-          exts={'.mp4','.mov','.mkv','.webm','.m4v','.avi','.mpg','.mpeg','.mp3','.wav','.m4a','.aac','.flac','.ogg','.png','.jpg','.jpeg','.webp','.gif','.zip','.7z','.tar','.gz','.tgz'}
-          found=[]
-          preferred=root/'dsh-handoff'
-          candidates=[]
-          if preferred.exists(): candidates.extend(preferred.rglob('*'))
+
+          root = Path('workspace').resolve()
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          marker = tmp / 'dsh-run-start.marker'
+          cutoff = marker.stat().st_mtime if marker.exists() else 0
+          stage = tmp / 'dsh-media'
+          stage.mkdir(parents=True, exist_ok=True)
+          exts = {'.mp4','.mov','.mkv','.webm','.m4v','.avi','.mpg','.mpeg','.mp3','.wav','.m4a','.aac','.flac','.ogg','.png','.jpg','.jpeg','.webp','.gif','.zip','.7z','.tar','.gz','.tgz'}
+
+          found = []
+          preferred = root / 'dsh-handoff'
+          candidates = []
+          if preferred.exists():
+              candidates.extend(preferred.rglob('*'))
           candidates.extend(root.rglob('*'))
-          seen=set()
+          seen = set()
           for p in candidates:
               try:
-                  rp=p.resolve()
-                  if rp in seen: continue
+                  rp = p.resolve()
+                  if rp in seen:
+                      continue
                   seen.add(rp)
-                  if not p.is_file() or '.git' in p.parts or p.suffix.lower() not in exts: continue
-                  if p.stat().st_mtime + 0.001 < cutoff: continue
-                  if p.stat().st_size <= 0: continue
+                  if not p.is_file() or '.git' in p.parts or p.suffix.lower() not in exts:
+                      continue
+                  if p.stat().st_mtime + 0.001 < cutoff or p.stat().st_size <= 0:
+                      continue
                   found.append(p)
-              except OSError: pass
+              except OSError:
+                  pass
+
           found.sort(key=lambda p: (0 if 'dsh-handoff' in p.parts else 1, str(p)))
-          listing=Path(os.environ['RUNNER_TEMP'])/'handoff-files.txt'
-          with listing.open('w') as f:
-              for p in found: f.write(str(p.relative_to(root))+'\n')
-          manifest={'count':len(found),'files':[{'path':str(p.relative_to(root)),'size':p.stat().st_size} for p in found]}
-          (Path(os.environ['RUNNER_TEMP'])/'handoff-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
+          manifest = {'count': len(found), 'files': []}
+          for p in found:
+              rel = p.relative_to(root)
+              dest = stage / rel
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(p, dest)
+              manifest['files'].append({'path': str(rel), 'size': p.stat().st_size})
+
+          (stage / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')))
+          (tmp / 'handoff-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, separators=(',', ':')))
           print(len(found))
           PY
           COUNT="$(python -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"handoff-manifest.json")))["count"])')"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           if [ "$COUNT" = 0 ]; then
             echo 'present=false' >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            echo 'present=true' >> "$GITHUB_OUTPUT"
           fi
-          tar -C workspace -cf "$RUNNER_TEMP/dsh-handoff.tar" -T "$RUNNER_TEMP/handoff-files.txt"
-          node workspace/scripts/dsh-handoff-crypto.mjs encrypt-file \
-            "$RUNNER_TEMP/dsh-handoff.tar" \
-            "$RUNNER_TEMP/dsh-session-key.b64" \
-            "$RUNNER_TEMP/dsh-handoff.dshenc"
-          rm -f "$RUNNER_TEMP/dsh-handoff.tar" "$RUNNER_TEMP/handoff-files.txt"
-          echo 'present=true' >> "$GITHUB_OUTPUT"
 
-      - name: Upload encrypted handoff
+      - name: Upload media handoff
         if: steps.media.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-handoff-${{ github.run_id }}
-          path: ${{ runner.temp }}/dsh-handoff.dshenc
+          name: dsh-media-${{ github.run_id }}
+          path: ${{ runner.temp }}/dsh-media/
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
@@ -215,18 +228,34 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
-          tmp=Path(os.environ['RUNNER_TEMP'])
-          out=(tmp/'dsh-output.txt').read_text(errors='replace') if (tmp/'dsh-output.txt').exists() else ''
-          err=(tmp/'dsh-error.txt').read_text(errors='replace') if (tmp/'dsh-error.txt').exists() else ''
-          try: code=int(os.environ.get('EXIT_CODE') or 1)
-          except: code=1
-          status='success'
-          if os.environ.get('MISSING_KEY')=='true': status='missing_openrouter_key'
-          elif os.environ.get('TIMED_OUT')=='true': status='timeout'
-          elif code!=0: status='error'
-          present=os.environ.get('MEDIA_PRESENT')=='true'
-          result={'status':status,'output':out[:100000],'stderr':err[:50000],'exit_code':code,'run_id':os.environ['GITHUB_RUN_ID'],'client_id':(tmp/'client-id.txt').read_text().strip(),'artifact_present':present,'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),'artifact_name':f"dsh-handoff-{os.environ['GITHUB_RUN_ID']}" if present else None}
-          (tmp/'handoff-result.json').write_text(json.dumps(result,ensure_ascii=False,separators=(',',':')))
+          tmp = Path(os.environ['RUNNER_TEMP'])
+          out = (tmp/'dsh-output.txt').read_text(errors='replace') if (tmp/'dsh-output.txt').exists() else ''
+          err = (tmp/'dsh-error.txt').read_text(errors='replace') if (tmp/'dsh-error.txt').exists() else ''
+          try:
+              code = int(os.environ.get('EXIT_CODE') or 1)
+          except Exception:
+              code = 1
+          status = 'success'
+          if os.environ.get('MISSING_KEY') == 'true':
+              status = 'missing_openrouter_key'
+          elif os.environ.get('TIMED_OUT') == 'true':
+              status = 'timeout'
+          elif code != 0:
+              status = 'error'
+          present = os.environ.get('MEDIA_PRESENT') == 'true'
+          result = {
+              'status': status,
+              'output': out[:100000],
+              'stderr': err[:50000],
+              'exit_code': code,
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'client_id': (tmp/'client-id.txt').read_text().strip(),
+              'artifact_present': present,
+              'artifact_count': int(os.environ.get('MEDIA_COUNT') or 0),
+              'artifact_name': f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if present else None,
+              'artifact_encrypted': False,
+          }
+          (tmp/'handoff-result.json').write_text(json.dumps(result, ensure_ascii=False, separators=(',', ':')))
           (tmp/'final-status.txt').write_text(status)
           PY
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt")"
@@ -248,9 +277,12 @@ jobs:
           set -euo pipefail
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt" 2>/dev/null || printf unknown)"
           STATUS="${DECRYPT_STATUS:-error}"
-          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"; fi
-          ART=false; [ "${MEDIA_PRESENT:-false}" = 'true' ] && ART=true
-          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":%s}\n' \
+          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then
+            STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"
+          fi
+          ART=false
+          [ "${MEDIA_PRESENT:-false}" = 'true' ] && ART=true
+          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","artifact_present":%s,"artifact_encrypted":false}\n' \
             "$STATUS" "$GITHUB_RUN_ID" "$CLIENT_ID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" > "$RUNNER_TEMP/handoff-status.json"
           put_file() {
             local path="$1" file="$2" msg="$3" content sha
@@ -264,7 +296,8 @@ jobs:
           }
           [ -f "$RUNNER_TEMP/dsh-handoff-result.enc.json" ] && put_file dsh-handoff-result.enc.json "$RUNNER_TEMP/dsh-handoff-result.enc.json" 'Update encrypted DSH handoff result [skip ci]'
           put_file dsh-handoff-status.json "$RUNNER_TEMP/handoff-status.json" 'Update safe DSH handoff status [skip ci]'
-          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt" "$RUNNER_TEMP/dsh-handoff.dshenc" "$RUNNER_TEMP/handoff-manifest.json"
+          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt" "$RUNNER_TEMP/handoff-manifest.json"
+          rm -rf "$RUNNER_TEMP/dsh-media"
 
       - name: Validate
         if: always()
