@@ -2,8 +2,13 @@
 set -euo pipefail
 
 URL="${1:-}"
+HEIGHT="${2:-720}"
 if [ -z "$URL" ]; then
-  echo 'usage: dsh-download-media.sh <url>' >&2
+  echo 'usage: dsh-download-media.sh <url> [max-height]' >&2
+  exit 2
+fi
+if ! [[ "$HEIGHT" =~ ^[0-9]{3,4}$ ]]; then
+  echo 'max-height must be a number such as 360 or 720' >&2
   exit 2
 fi
 
@@ -30,10 +35,10 @@ COMMON=(
   -o '%(title).100s_[%(id)s].%(ext)s'
   --print 'after_move:filepath'
 )
-FORMAT=( -f 'best[height<=720][ext=mp4]/best[height<=720]/best' )
+FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
 
 set +e
-OUT="$(timeout --signal=TERM --kill-after=5s 150s "$YTDLP" "${COMMON[@]}" "${FORMAT[@]}" "$URL")"
+OUT="$(timeout --signal=TERM --kill-after=5s 150s "$YTDLP" "${COMMON[@]}" -f "$FORMAT" "$URL")"
 CODE=$?
 set -e
 
@@ -44,7 +49,7 @@ if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; t
   set +e
   OUT="$(timeout --signal=TERM --kill-after=5s 150s "$YTDLP" "${COMMON[@]}" \
     --extractor-args 'youtube:player_client=web_safari' \
-    -f 'best[height<=720]/best' "$URL")"
+    -f "best[height<=${HEIGHT}]/best" "$URL")"
   CODE=$?
   set -e
 fi
@@ -63,12 +68,12 @@ fi
 REL="${FINAL#./}"
 BYTES="$(stat -c '%s' "$FINAL")"
 
-python - "$URL" "$REL" "$BYTES" <<'PY'
+python - "$URL" "$REL" "$BYTES" "$HEIGHT" <<'PY'
 import json, sys
 from pathlib import Path
-url, rel, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+url, rel, size, height = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 p = Path('dsh-handoff/handoff.json')
-data = {'source_url': url, 'relative_path': rel, 'bytes': size}
+data = {'source_url': url, 'relative_path': rel, 'bytes': size, 'max_height': height}
 p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 PY
 
