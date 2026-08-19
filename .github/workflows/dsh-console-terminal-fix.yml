@@ -1,0 +1,30 @@
+name: Patch DSH Console Terminal Status
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-console-terminal-fix-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch console
+        run: python3 scripts/patch-dsh-console-terminal-status.py
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name "runner-6-console-fix-bot"
+          git config user.email "runner-6-console-fix-bot@users.noreply.github.com"
+          git add dsh-console/index.html
+          git commit -m "Treat DSH timeout as terminal [skip ci]" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((i*2))
+          done
+          exit 1
