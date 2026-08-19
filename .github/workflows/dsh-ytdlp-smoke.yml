@@ -1,0 +1,62 @@
+name: DSH yt-dlp Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-ytdlp-smoke-trigger.txt"
+      - ".github/workflows/dsh-ytdlp-smoke.yml"
+      - "scripts/setup-dsh-media-tools.sh"
+      - "scripts/dsh-download-media.sh"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-ytdlp-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Download open-content YouTube smoke video
+        id: dl
+        run: |
+          set -euo pipefail
+          bash scripts/dsh-download-media.sh 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' 360 | tee "$RUNNER_TEMP/download.txt"
+          test -s dsh-handoff/handoff.json
+          test -n "$(find dsh-handoff/downloads -type f -size +0c -print -quit)"
+
+      - name: Upload plain smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-ytdlp-smoke-${{ github.run_id }}
+          path: dsh-handoff/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish safe smoke status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          HAS=false
+          [ -s dsh-handoff/handoff.json ] && HAS=true
+          printf '{"status":"%s","run_id":"%s","artifact_present":%s}\n' "$JOB_STATUS" "$GITHUB_RUN_ID" "$HAS" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-smoke-status.json" -f message='Update DSH yt-dlp smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-smoke-status.json" -f message='Update DSH yt-dlp smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
