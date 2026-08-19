@@ -1,1 +1,1 @@
-{"status":"plan_error","run_id":"32286465677","client_id":"media_smoke_cb7e27380f016e111e34a626","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","artifact_present":false}
+{"status":"planning","run_id":"32286954619","client_id":"media_smoke2_b0b396ded53692f183f6","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","artifact_present":false}
