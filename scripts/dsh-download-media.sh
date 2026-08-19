@@ -22,11 +22,15 @@ fi
 mkdir -p dsh-handoff/downloads
 
 YTDLP="$HOME/.local/bin/yt-dlp"
-if [ ! -x "$YTDLP" ]; then
+if [ ! -x "$YTDLP" ] || { [ "$MODE" = audio ] && ! command -v ffmpeg >/dev/null 2>&1; }; then
   bash scripts/setup-dsh-media-tools.sh
 fi
 if [ ! -x "$YTDLP" ]; then
   echo 'yt-dlp setup failed' >&2
+  exit 3
+fi
+if [ "$MODE" = audio ] && ! command -v ffmpeg >/dev/null 2>&1; then
+  echo 'ffmpeg is required for MP3 audio mode' >&2
   exit 3
 fi
 
@@ -43,10 +47,19 @@ COMMON=(
   --print 'after_move:filepath'
 )
 VIDEO_FORMAT="best[height<=${HEIGHT}][ext=mp4]/best[height<=${HEIGHT}]/best"
-AUDIO_FORMAT="bestaudio[ext=m4a]/bestaudio"
+AUDIO_FORMAT="bestaudio/best"
 
 run_ytdlp() {
   timeout --signal=TERM --kill-after=5s 120s "$YTDLP" "${COMMON[@]}" "$@" "$URL"
+}
+
+run_mode_download() {
+  local format="$1"; shift
+  if [ "$MODE" = audio ]; then
+    run_ytdlp --extract-audio --audio-format mp3 --audio-quality 0 "$@" -f "$format"
+  else
+    run_ytdlp "$@" -f "$format"
+  fi
 }
 
 try_public_clients() {
@@ -55,20 +68,20 @@ try_public_clients() {
   [ "$MODE" = audio ] && format="$AUDIO_FORMAT"
 
   set +e
-  out="$(run_ytdlp -f "$format")"
+  out="$(run_mode_download "$format")"
   code=$?
   set -e
 
   if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
     set +e
-    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' -f "$format")"
+    out="$(run_mode_download "$format" --extractor-args 'youtube:player_client=web_embedded,default')"
     code=$?
     set -e
   fi
 
   if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
     set +e
-    out="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' -f "$format")"
+    out="$(run_mode_download "$format" --extractor-args 'youtube:player_client=web_safari')"
     code=$?
     set -e
   fi
@@ -126,6 +139,10 @@ if [ -z "$FINAL" ] || [ ! -f "$FINAL" ] || [ ! -s "$FINAL" ]; then
   echo 'download command returned success but no non-empty final file was found' >&2
   exit 4
 fi
+if [ "$MODE" = audio ] && [[ "${FINAL,,}" != *.mp3 ]]; then
+  echo "audio mode returned non-MP3 output: $FINAL" >&2
+  exit 4
+fi
 
 ABS="$(realpath "$FINAL")"
 ROOT="$(realpath "$PWD")"
@@ -140,7 +157,14 @@ import json, sys
 from pathlib import Path
 url, rel, size, height, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 p = Path('dsh-handoff/handoff.json')
-data = {'source_url': url, 'relative_path': rel, 'bytes': size, 'max_height': height, 'media_type': mode}
+data = {
+    'source_url': url,
+    'relative_path': rel,
+    'bytes': size,
+    'max_height': height,
+    'media_type': mode,
+    'output_format': 'mp3' if mode == 'audio' else Path(rel).suffix.lower().lstrip('.'),
+}
 p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 PY
 
