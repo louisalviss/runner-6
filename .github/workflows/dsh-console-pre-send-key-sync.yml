@@ -1,0 +1,44 @@
+name: Patch DSH console pre-send key sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-console-pre-send-key-sync-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Patch console
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('dsh-console/index.html')
+          s=p.read_text()
+          old="if(!token.value.trim())throw Error('Add your GitHub key in Settings first.');const sec=await encryptTask(text);"
+          new="if(!token.value.trim())throw Error('Add your GitHub key in Settings first.');const synced=await syncPublishedEncryption();if(!synced)throw Error('Encryption key unavailable. Reload this page and try again.');const sec=await encryptTask(text);"
+          if old not in s:
+              if new in s:
+                  print('Already patched')
+                  raise SystemExit(0)
+              raise SystemExit('Expected sendMessage snippet not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Publish patched index via Contents API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FILE=dsh-console/index.html
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/$FILE?ref=main" --jq .sha)"
+          CONTENT="$(base64 -w0 "$FILE")"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$FILE" \
+            -f message='Sync DSH public key before every send [skip ci]' \
+            -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
