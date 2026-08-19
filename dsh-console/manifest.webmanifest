@@ -1,0 +1,9 @@
+{
+  "name": "DSH Console",
+  "short_name": "DSH",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "description": "Direct mobile console for Runner 6 DeepSeek Harness"
+}
