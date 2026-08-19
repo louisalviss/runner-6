@@ -1,0 +1,77 @@
+name: DSH Encrypted Handoff Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-handoff-smoke-request.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-6-handoff-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Decrypt request and session key
+        env:
+          DSH_CHAT_PRIVATE_KEY_B64: ${{ secrets.DSH_CHAT_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          node scripts/dsh-handoff-crypto.mjs decrypt-envelope \
+            dsh-handoff-smoke-request.txt \
+            "$RUNNER_TEMP/task.txt" \
+            "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/client-id.txt"
+          test "$(cat "$RUNNER_TEMP/task.txt")" = "__HANDOFF_SMOKE__"
+
+      - name: Generate deterministic smoke MP4
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/handoff"
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "color=c=black:s=320x240:r=25:d=1" \
+            -f lavfi -i "sine=frequency=880:sample_rate=44100:duration=1" \
+            -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac \
+            "$RUNNER_TEMP/handoff/DSH_HANDOFF_SMOKE.mp4"
+          test -s "$RUNNER_TEMP/handoff/DSH_HANDOFF_SMOKE.mp4"
+          ffprobe -v error -show_entries format=duration,size -of json "$RUNNER_TEMP/handoff/DSH_HANDOFF_SMOKE.mp4" > "$RUNNER_TEMP/probe.json"
+
+      - name: Encrypt handoff package
+        run: |
+          set -euo pipefail
+          tar -C "$RUNNER_TEMP/handoff" -cf "$RUNNER_TEMP/handoff.tar" DSH_HANDOFF_SMOKE.mp4
+          node scripts/dsh-handoff-crypto.mjs encrypt-file \
+            "$RUNNER_TEMP/handoff.tar" \
+            "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/dsh-handoff-smoke.dshenc"
+          test -s "$RUNNER_TEMP/dsh-handoff-smoke.dshenc"
+          rm -f "$RUNNER_TEMP/handoff.tar" "$RUNNER_TEMP/session-key.b64" "$RUNNER_TEMP/task.txt"
+
+      - name: Upload encrypted artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-handoff-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/dsh-handoff-smoke.dshenc
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Validate
+        run: |
+          test -s "$RUNNER_TEMP/probe.json"
+          cat "$RUNNER_TEMP/probe.json"
