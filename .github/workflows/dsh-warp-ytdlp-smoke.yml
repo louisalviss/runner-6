@@ -1,0 +1,87 @@
+name: DSH WARP yt-dlp smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-warp-ytdlp-smoke-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Record original egress
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 10 https://www.cloudflare.com/cdn-cgi/trace | grep -E '^(ip|colo|warp)=' | tee "$RUNNER_TEMP/before.txt"
+
+      - name: Connect Cloudflare WARP
+        run: bash scripts/setup-cloudflare-warp.sh | tee "$RUNNER_TEMP/warp.txt"
+
+      - name: Download open-content YouTube video through WARP
+        id: dl
+        run: |
+          set +e
+          bash scripts/dsh-download-media.sh 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' 360 \
+            >"$RUNNER_TEMP/download-output.txt" 2>"$RUNNER_TEMP/download-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -eq 0 ] && [ -s dsh-handoff/handoff.json ]; then
+            echo 'ok=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ok=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Disconnect WARP
+        if: always()
+        run: warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+
+      - name: Upload video artifact
+        if: steps.dl.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-warp-ytdlp-${{ github.run_id }}
+          path: dsh-handoff/
+          retention-days: 2
+          compression-level: 0
+
+      - name: Publish safe smoke status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DL_OK: ${{ steps.dl.outputs.ok }}
+          DL_CODE: ${{ steps.dl.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          STATUS=failure
+          [ "${DL_OK:-false}" = true ] && STATUS=success
+          BEFORE="$(grep '^ip=' "$RUNNER_TEMP/before.txt" 2>/dev/null | cut -d= -f2 || true)"
+          WARP_IP="$(grep '^ip=' "$RUNNER_TEMP/warp.txt" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+          WARP_ON="$(grep '^warp=' "$RUNNER_TEMP/warp.txt" 2>/dev/null | tail -1 | cut -d= -f2 || true)"
+          ERR="$(tail -c 1200 "$RUNNER_TEMP/download-error.txt" 2>/dev/null | python -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+          printf '{"status":"%s","run_id":"%s","download_exit_code":"%s","warp":"%s","ip_changed":%s,"before_ip":"%s","warp_ip":"%s","error":%s}\n' \
+            "$STATUS" "$GITHUB_RUN_ID" "${DL_CODE:-}" "$WARP_ON" "$([ -n "$BEFORE" ] && [ -n "$WARP_IP" ] && [ "$BEFORE" != "$WARP_IP" ] && echo true || echo false)" "$BEFORE" "$WARP_IP" "$ERR" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-warp-ytdlp-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-warp-ytdlp-smoke-status.json" -f message='Update WARP yt-dlp smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-warp-ytdlp-smoke-status.json" -f message='Update WARP yt-dlp smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
+
+      - name: Validate
+        run: |
+          [ "${{ steps.dl.outputs.ok }}" = true ]
