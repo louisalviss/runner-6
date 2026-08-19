@@ -18,11 +18,12 @@ concurrency:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     env:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
       DSH_MODEL: "deepseek/deepseek-v4-pro"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
     steps:
       - name: Checkout public workspace without credentials
@@ -36,8 +37,7 @@ jobs:
           node-version: "24"
 
       - name: Set runtime paths
-        run: |
-          echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
 
       - name: Parse encrypted envelope
         env:
@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt")"
           cat > "$RUNNER_TEMP/dsh-status.json" <<EOF
-          {"status":"started","run_id":"${GITHUB_RUN_ID}","client_id":"${CLIENT_ID}","provider":"${DSH_PROVIDER}","model":"${DSH_MODEL}"}
+          {"status":"started","run_id":"${GITHUB_RUN_ID}","client_id":"${CLIENT_ID}","provider":"${DSH_PROVIDER}","model":"${DSH_MODEL}","browser":"playwright-mcp","artifact_present":false}
           EOF
           CONTENT="$(base64 -w0 "$RUNNER_TEMP/dsh-status.json")"
           SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-status.json?ref=main" --jq .sha 2>/dev/null || true)"
@@ -87,16 +87,8 @@ jobs:
           const crypto = require('crypto');
           const tmp = process.env.RUNNER_TEMP;
           const p = JSON.parse(fs.readFileSync(tmp + '/secure-envelope.json', 'utf8'));
-          const privateKey = crypto.createPrivateKey({
-            key: Buffer.from(process.env.DSH_CHAT_PRIVATE_KEY_B64, 'base64'),
-            format: 'der',
-            type: 'pkcs8'
-          });
-          const aesKey = crypto.privateDecrypt({
-            key: privateKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: 'sha256'
-          }, Buffer.from(p.ek, 'base64url'));
+          const privateKey = crypto.createPrivateKey({key: Buffer.from(process.env.DSH_CHAT_PRIVATE_KEY_B64, 'base64'), format: 'der', type: 'pkcs8'});
+          const aesKey = crypto.privateDecrypt({key: privateKey, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256'}, Buffer.from(p.ek, 'base64url'));
           if (aesKey.length !== 32) throw new Error('invalid aes key');
           const full = Buffer.from(p.ct, 'base64url');
           if (full.length < 17) throw new Error('invalid ciphertext');
@@ -147,7 +139,24 @@ jobs:
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
 
-      - name: Run DSH
+      - name: Cache DSH and Chromium downloads
+        if: steps.decrypt.outputs.ready == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.npm
+          key: runner6-dsh-${{ runner.os }}-rc7-pwmcp-0.0.78
+
+      - name: Configure Playwright MCP browser
+        if: steps.decrypt.outputs.ready == 'true'
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Mark artifact scan start
+        if: steps.decrypt.outputs.ready == 'true'
+        run: touch "$RUNNER_TEMP/dsh-run-start.marker"
+
+      - name: Run DSH with browser tools
         id: run_dsh
         if: steps.decrypt.outputs.ready == 'true'
         working-directory: workspace
@@ -160,23 +169,65 @@ jobs:
             : > "$RUNNER_TEMP/dsh-error.txt"
             echo 'missing_key=true' >> "$GITHUB_OUTPUT"
             echo 'exit_code=3' >> "$GITHUB_OUTPUT"
+            echo 'timed_out=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
           set +e
-          npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          timeout --signal=TERM --kill-after=10s 600s \
+            npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
+            > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
           CODE=$?
           set -e
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
           unset TASK OPENROUTER_API_KEY
+
+      - name: Collect browser and media outputs
+        id: media
+        if: steps.decrypt.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path('workspace/dsh-handoff')
+          files = []
+          if root.exists():
+              for p in root.rglob('*'):
+                  try:
+                      if p.is_file() and p.stat().st_size > 0:
+                          files.append({'path': str(p.relative_to(Path('workspace'))), 'size': p.stat().st_size})
+                  except OSError:
+                      pass
+          out = {'count': len(files), 'files': files}
+          Path(os.environ['RUNNER_TEMP'],'dsh-media-manifest.json').write_text(json.dumps(out,separators=(',',':')))
+          print(len(files))
+          PY
+          COUNT="$(python -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"dsh-media-manifest.json")))["count"])')"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -gt 0 ]; then echo 'present=true' >> "$GITHUB_OUTPUT"; else echo 'present=false' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Upload plain browser/media artifact
+        if: steps.media.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-media-${{ github.run_id }}
+          path: workspace/dsh-handoff/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
 
       - name: Encrypt DSH response
         id: encrypt_result
         if: steps.decrypt.outputs.ready == 'true'
         env:
           MISSING_KEY: ${{ steps.run_dsh.outputs.missing_key }}
+          TIMED_OUT: ${{ steps.run_dsh.outputs.timed_out }}
           DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
+          MEDIA_PRESENT: ${{ steps.media.outputs.present }}
+          MEDIA_COUNT: ${{ steps.media.outputs.count }}
         run: |
           set -euo pipefail
           node <<'NODE'
@@ -189,27 +240,28 @@ jobs:
           if (!Number.isFinite(code)) code = 1;
           let status = 'success';
           if (process.env.MISSING_KEY === 'true') status = 'missing_openrouter_key';
+          else if (process.env.TIMED_OUT === 'true') status = 'timeout';
           else if (code !== 0) status = 'error';
+          const media = process.env.MEDIA_PRESENT === 'true';
           const result = {
             status,
             output: out.slice(0, 100000),
             stderr: err.slice(0, 50000),
             exit_code: code,
             run_id: process.env.GITHUB_RUN_ID,
-            client_id: fs.readFileSync(tmp + '/client-id.txt','utf8').trim()
+            client_id: fs.readFileSync(tmp + '/client-id.txt','utf8').trim(),
+            browser: 'playwright-mcp',
+            artifact_present: media,
+            artifact_count: Number.parseInt(process.env.MEDIA_COUNT || '0', 10) || 0,
+            artifact_name: media ? `dsh-media-${process.env.GITHUB_RUN_ID}` : null,
+            artifact_encrypted: false
           };
           const key = Buffer.from(fs.readFileSync(tmp + '/dsh-session-key.b64','utf8').trim(), 'base64url');
           const iv = crypto.randomBytes(12);
           const enc = crypto.createCipheriv('aes-256-gcm', key, iv);
           const body = Buffer.concat([enc.update(Buffer.from(JSON.stringify(result),'utf8')), enc.final()]);
           const tag = enc.getAuthTag();
-          const packed = {
-            v: 1,
-            client_id: result.client_id,
-            run_id: result.run_id,
-            iv: iv.toString('base64url'),
-            ct: Buffer.concat([body, tag]).toString('base64url')
-          };
+          const packed = {v:1, client_id:result.client_id, run_id:result.run_id, iv:iv.toString('base64url'), ct:Buffer.concat([body,tag]).toString('base64url')};
           fs.writeFileSync(tmp + '/dsh-result.enc.json', JSON.stringify(packed));
           fs.writeFileSync(tmp + '/final-status.txt', status);
           NODE
@@ -220,19 +272,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DECRYPT_READY: ${{ steps.decrypt.outputs.ready }}
           DECRYPT_STATUS: ${{ steps.decrypt.outputs.status }}
+          MEDIA_PRESENT: ${{ steps.media.outputs.present }}
         run: |
           set -euo pipefail
           CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt" 2>/dev/null || printf unknown)"
           STATUS="${DECRYPT_STATUS:-error}"
-          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then
-            STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"
-          fi
+          if [ "${DECRYPT_READY:-false}" = 'true' ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"; fi
+          ART=false; [ "${MEDIA_PRESENT:-false}" = 'true' ] && ART=true
           cat > "$RUNNER_TEMP/dsh-status.json" <<EOF
-          {"status":"${STATUS}","run_id":"${GITHUB_RUN_ID}","client_id":"${CLIENT_ID}","provider":"${DSH_PROVIDER}","model":"${DSH_MODEL}"}
+          {"status":"${STATUS}","run_id":"${GITHUB_RUN_ID}","client_id":"${CLIENT_ID}","provider":"${DSH_PROVIDER}","model":"${DSH_MODEL}","browser":"playwright-mcp","artifact_present":${ART},"artifact_encrypted":false}
           EOF
           put_file() {
-            local path="$1" file="$2" msg="$3"
-            local content sha
+            local path="$1" file="$2" msg="$3" content sha
             content="$(base64 -w0 "$file")"
             sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=main" --jq .sha 2>/dev/null || true)"
             if [ -n "$sha" ]; then
@@ -241,11 +292,9 @@ jobs:
               gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f branch=main >/dev/null
             fi
           }
-          if [ -f "$RUNNER_TEMP/dsh-result.enc.json" ]; then
-            put_file dsh-result.enc.json "$RUNNER_TEMP/dsh-result.enc.json" 'Update encrypted DSH result [skip ci]'
-          fi
+          [ -f "$RUNNER_TEMP/dsh-result.enc.json" ] && put_file dsh-result.enc.json "$RUNNER_TEMP/dsh-result.enc.json" 'Update encrypted DSH result [skip ci]'
           put_file dsh-status.json "$RUNNER_TEMP/dsh-status.json" 'Update safe DSH status [skip ci]'
-          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/secure-envelope.json"
+          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/secure-envelope.json" "$RUNNER_TEMP/dsh-media-manifest.json"
 
       - name: Validate
         if: always()
