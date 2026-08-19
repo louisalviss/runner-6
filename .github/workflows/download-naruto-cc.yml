@@ -18,13 +18,39 @@ concurrency:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Publish run marker
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('naruto-download-status.json').write_text(json.dumps({
+              'status': 'started',
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'sha': os.environ.get('GITHUB_SHA'),
+          }, indent=2) + '\n')
+          PY
+          cp naruto-download-status.json "$RUNNER_TEMP/status.json"
+          git fetch origin main
+          git reset --hard origin/main
+          cp "$RUNNER_TEMP/status.json" naruto-download-status.json
+          git config user.name "runner-6-media-bot"
+          git config user.email "runner-6-media-bot@users.noreply.github.com"
+          git add naruto-download-status.json
+          git commit -m "Naruto CC download started [skip ci]" || exit 0
+          git push origin HEAD:main
 
       - name: Install yt-dlp
         run: python -m pip install --disable-pip-version-check -q -U yt-dlp
@@ -39,22 +65,31 @@ jobs:
           from pathlib import Path
 
           queries = [
-              'Naruto',
-              'Naruto anime',
-              'Naruto fan animation',
-              'Naruto review',
+              'Naruto Creative Commons',
+              'Naruto CC BY',
+              'Naruto fan animation Creative Commons',
+              'Naruto review Creative Commons',
           ]
           seen = set()
           chosen = None
+          checked = 0
+          MAX_CHECKED = 25
 
-          def run(args, timeout=60):
-              return subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+          def run(args, timeout=45):
+              try:
+                  return subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+              except subprocess.TimeoutExpired:
+                  return None
 
           for query in queries:
-              p = run(['yt-dlp', '--flat-playlist', '--dump-json', '--no-warnings', f'ytsearch30:{query}'], timeout=90)
-              if p.returncode != 0:
+              if checked >= MAX_CHECKED:
+                  break
+              p = run(['yt-dlp', '--flat-playlist', '--dump-json', '--no-warnings', f'ytsearch12:{query}'], timeout=60)
+              if not p or p.returncode != 0:
                   continue
               for line in p.stdout.splitlines():
+                  if checked >= MAX_CHECKED:
+                      break
                   try:
                       row = json.loads(line)
                   except Exception:
@@ -63,50 +98,53 @@ jobs:
                   if not vid or vid in seen:
                       continue
                   seen.add(vid)
+                  checked += 1
                   url = f'https://www.youtube.com/watch?v={vid}'
-                  q = run(['yt-dlp', '--skip-download', '--dump-single-json', '--no-warnings', url], timeout=60)
-                  if q.returncode != 0:
+                  q = run(['yt-dlp', '--skip-download', '--dump-single-json', '--no-warnings', url], timeout=45)
+                  if not q or q.returncode != 0:
                       continue
                   try:
                       info = json.loads(q.stdout)
                   except Exception:
                       continue
                   lic = str(info.get('license') or '')
-                  title = str(info.get('title') or '')
                   duration = info.get('duration') or 0
-                  live = info.get('is_live')
                   if 'creative commons' not in lic.lower():
                       continue
                   if duration and duration > 1800:
                       continue
-                  if live:
+                  if info.get('is_live'):
                       continue
                   chosen = {
                       'id': vid,
                       'url': url,
-                      'title': title,
+                      'title': info.get('title'),
                       'license': lic,
                       'uploader': info.get('uploader'),
                       'duration': duration,
                       'webpage_url': info.get('webpage_url') or url,
+                      'checked_candidates': checked,
                   }
                   break
               if chosen:
                   break
 
           if not chosen:
-              Path('naruto-download-result.json').write_text(json.dumps({
+              Path('/tmp/find_status.json').write_text(json.dumps({
                   'status': 'no_creative_commons_candidate',
-                  'searched': len(seen),
+                  'checked_candidates': checked,
+                  'unique_candidates': len(seen),
               }, indent=2) + '\n')
               sys.exit(4)
 
           Path('download/source.json').write_text(json.dumps(chosen, ensure_ascii=False, indent=2) + '\n')
           Path('/tmp/chosen_url.txt').write_text(chosen['url'])
+          Path('/tmp/find_status.json').write_text(json.dumps({'status': 'found', **chosen}, ensure_ascii=False, indent=2) + '\n')
           print(json.dumps(chosen, ensure_ascii=False))
           PY
 
       - name: Download selected video
+        if: steps.find.outcome == 'success'
         run: |
           set -euo pipefail
           URL="$(cat /tmp/chosen_url.txt)"
@@ -128,9 +166,18 @@ jobs:
           source = {}
           if Path('download/source.json').exists():
               source = json.loads(Path('download/source.json').read_text())
+          find_status = {}
+          if Path('/tmp/find_status.json').exists():
+              find_status = json.loads(Path('/tmp/find_status.json').read_text())
           videos = [p for p in Path('download').glob('naruto_cc.*') if p.is_file()]
+          if videos:
+              status = 'success'
+          elif find_status.get('status') == 'no_creative_commons_candidate':
+              status = 'no_creative_commons_candidate'
+          else:
+              status = 'download_failed'
           result = {
-              'status': 'success' if videos else ('no_creative_commons_candidate' if Path('naruto-download-result.json').exists() else 'download_failed'),
+              'status': status,
               'run_id': os.environ.get('GITHUB_RUN_ID'),
               'sha': os.environ.get('GITHUB_SHA'),
               'title': source.get('title'),
@@ -139,11 +186,18 @@ jobs:
               'license': source.get('license'),
               'uploader': source.get('uploader'),
               'duration': source.get('duration'),
+              'checked_candidates': source.get('checked_candidates') or find_status.get('checked_candidates'),
               'file': videos[0].name if videos else None,
               'bytes': videos[0].stat().st_size if videos else None,
               'artifact_name': f"naruto-cc-{os.environ.get('GITHUB_RUN_ID')}",
           }
           Path('naruto-download-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+          Path('naruto-download-status.json').write_text(json.dumps({
+              'status': status,
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'sha': os.environ.get('GITHUB_SHA'),
+              'artifact_name': result['artifact_name'],
+          }, indent=2) + '\n')
           PY
 
       - name: Upload video artifact
@@ -160,13 +214,15 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          cp naruto-download-result.json "$RUNNER_TEMP/naruto-download-result.json"
+          cp naruto-download-result.json "$RUNNER_TEMP/result.json"
+          cp naruto-download-status.json "$RUNNER_TEMP/status-final.json"
           git fetch origin main
           git reset --hard origin/main
-          cp "$RUNNER_TEMP/naruto-download-result.json" naruto-download-result.json
+          cp "$RUNNER_TEMP/result.json" naruto-download-result.json
+          cp "$RUNNER_TEMP/status-final.json" naruto-download-status.json
           git config user.name "runner-6-media-bot"
           git config user.email "runner-6-media-bot@users.noreply.github.com"
-          git add naruto-download-result.json
+          git add naruto-download-result.json naruto-download-status.json
           git commit -m "Update Naruto CC download result [skip ci]" || exit 0
           git push origin HEAD:main
 
