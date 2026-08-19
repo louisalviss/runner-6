@@ -1,3 +1,4 @@
-2026-08-20T06:31+07:00
+2026-08-20T06:36+07:00
 case: METAMORPHOSIS — INTERWORLD original
 model: nvidia/nemotron-3-ultra-550b-a55b:free
+retrigger: workflow already present on main
