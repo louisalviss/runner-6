@@ -1,0 +1,94 @@
+name: DSH yt-dlp macOS Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-ytdlp-macos-smoke-trigger.txt"
+      - ".github/workflows/dsh-ytdlp-macos-smoke.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-ytdlp-macos-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install yt-dlp
+        run: python -m pip install --disable-pip-version-check --quiet --upgrade yt-dlp
+
+      - name: Download open-content YouTube video
+        id: dl
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dsh-handoff/downloads
+          set +e
+          python -m yt_dlp \
+            --js-runtimes node \
+            --no-playlist \
+            --restrict-filenames \
+            --socket-timeout 20 \
+            --retries 2 \
+            --max-filesize 250M \
+            -P dsh-handoff/downloads \
+            -o '%(title).100s_[%(id)s].%(ext)s' \
+            -f 'best[height<=360][ext=mp4]/best[height<=360]/best' \
+            'https://www.youtube.com/watch?v=aqz-KE-bpKQ' \
+            >"$RUNNER_TEMP/ytdlp.out" 2>"$RUNNER_TEMP/ytdlp.err"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -eq 0 ] && find dsh-handoff/downloads -type f -size +0c | grep -q .; then
+            echo 'downloaded=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'downloaded=false' >> "$GITHUB_OUTPUT"
+            tail -c 5000 "$RUNNER_TEMP/ytdlp.err" >&2 || true
+          fi
+
+      - name: Upload smoke artifact
+        if: steps.dl.outputs.downloaded == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-ytdlp-macos-${{ github.run_id }}
+          path: dsh-handoff/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish safe status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DL: ${{ steps.dl.outputs.downloaded }}
+          CODE: ${{ steps.dl.outputs.exit_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OK=false; [ "${DL:-false}" = true ] && OK=true
+          printf '{"run_id":"%s","downloaded":%s,"exit_code":"%s","runner":"macos-latest"}\n' "$GITHUB_RUN_ID" "$OK" "${CODE:-}" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 < "$RUNNER_TEMP/status.json" | tr -d '\n')"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-macos-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-macos-status.json" -f message='Update yt-dlp macOS smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-ytdlp-macos-status.json" -f message='Update yt-dlp macOS smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
+
+      - name: Validate
+        if: always()
+        shell: bash
+        run: test "${{ steps.dl.outputs.downloaded }}" = true
