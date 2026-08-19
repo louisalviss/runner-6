@@ -1,16 +1,15 @@
 {
-  "status": "no_cc_candidate_from_native_filter",
-  "run_id": "32247743408",
-  "sha": "29b90b02c0798c8ba10e27dd83334ecc50d4e189",
-  "title": null,
-  "video_id": null,
-  "source_url": null,
-  "license": null,
-  "license_verified_by": null,
-  "uploader": null,
-  "duration": null,
-  "checked_candidates": 30,
+  "status": "download_failed",
+  "run_id": "32247938766",
+  "sha": "83c81638d943ca414c3b19c4124f658306e0563a",
+  "title": "Naruto: The Betrayal of a Childhood",
+  "video_id": "7mXILxpS_lw",
+  "source_url": "https://www.youtube.com/watch?v=7mXILxpS_lw",
+  "license": "Creative Commons (selected by YouTube native CC filter)",
+  "license_verified_by": "youtube_native_cc_search_filter",
+  "uploader": "KneeCaps",
+  "duration": 399,
   "file": null,
   "bytes": null,
-  "artifact_name": "naruto-cc-32247743408"
+  "artifact_name": "naruto-cc-32247938766"
 }

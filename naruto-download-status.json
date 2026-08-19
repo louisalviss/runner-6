@@ -1,5 +1,6 @@
 {
-  "status": "started",
+  "status": "download_failed",
   "run_id": "32247938766",
-  "sha": "83c81638d943ca414c3b19c4124f658306e0563a"
+  "sha": "83c81638d943ca414c3b19c4124f658306e0563a",
+  "artifact_name": "naruto-cc-32247938766"
 }
