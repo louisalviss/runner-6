@@ -18,9 +18,16 @@ fi
 
 # Only the media subprocess is routed through a public relay namespace.
 # DSH/OpenRouter/GitHub credential steps have already finished and no secrets
-# are passed to this script.
-sudo apt-get update -qq
-sudo apt-get install -y -qq openvpn iproute2 iptables curl >/dev/null
+# are passed to this script. Package setup is also hard-bounded.
+if ! command -v openvpn >/dev/null 2>&1; then
+  echo 'Installing bounded OpenVPN dependency...' >&2
+  sudo "$TIMEOUT_BIN" --signal=TERM --kill-after=5s 45s apt-get update -qq || true
+  sudo "$TIMEOUT_BIN" --signal=TERM --kill-after=5s 75s apt-get install -y -qq openvpn >/dev/null
+fi
+command -v openvpn >/dev/null 2>&1 || { echo 'OpenVPN unavailable after bounded setup' >&2; exit 4; }
+command -v ip >/dev/null 2>&1 || { echo 'iproute2 unavailable' >&2; exit 4; }
+command -v iptables >/dev/null 2>&1 || { echo 'iptables unavailable' >&2; exit 4; }
+command -v curl >/dev/null 2>&1 || { echo 'curl unavailable' >&2; exit 4; }
 
 ROOT=/tmp/dsh-vpngate
 POOL="$ROOT/pool"
@@ -101,8 +108,6 @@ while IFS=$'\t' read -r cfg country relay; do
   exitip="$(sudo ip netns exec dshvpn curl -fsS --connect-timeout 5 --max-time 8 https://api.ipify.org || true)"
   ERR="$ROOT/ytdlp.err"; : > "$ERR"
 
-  # Probe metadata first. Bad/blocked relays fail here in seconds, before we
-  # spend time transferring a file.
   set +e
   run_in_vpn "$TIMEOUT_BIN" --signal=TERM --kill-after=3s 25s \
     "$YTDLP" --js-runtimes "node:$NODE_BIN" --no-playlist --socket-timeout 10 \
