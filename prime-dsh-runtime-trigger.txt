@@ -1,1 +1,1 @@
-prime-dsh-runtime-rc7-playwright-mcp-078
+prime-dsh-runtime-rc7-playwright-mcp-078-pnpm-v2
