@@ -8,6 +8,7 @@ on:
       - ".github/workflows/dsh-ytdlp-smoke.yml"
       - "scripts/setup-dsh-media-tools.sh"
       - "scripts/dsh-download-media.sh"
+      - "scripts/dsh-ytdlp-vpngate.sh"
 
 permissions:
   contents: write
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
