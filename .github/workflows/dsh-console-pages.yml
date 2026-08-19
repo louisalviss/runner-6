@@ -80,3 +80,5 @@ jobs:
           git add dsh-console-deploy-status.json
           git commit -m "Update DSH Console deploy result [skip ci]" || true
           git push origin HEAD:main
+
+# redeploy realtime response fix
