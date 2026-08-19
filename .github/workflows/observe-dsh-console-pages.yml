@@ -1,0 +1,46 @@
+name: Observe DSH Console Pages v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-console-pages-observer-trigger.txt"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for latest Pages v2 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TARGET_SHA="031b636fd746c12f23b42c900dad07978fc2a904"
+          DATA=''
+          for i in $(seq 1 30); do
+            DATA="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow dsh-console-pages-v2.yml --branch main --limit 10 --json databaseId,status,conclusion,headSha,createdAt,updatedAt,url --jq '[.[] | select(.headSha == "'"$TARGET_SHA"'")][0] // {}')"
+            STATUS="$(printf '%s' "$DATA" | jq -r '.status // empty')"
+            if [ "$STATUS" = completed ]; then break; fi
+            sleep 4
+          done
+          printf '%s\n' "$DATA" > /tmp/dsh-console-pages-observer.json
+      - name: Publish observer result
+        run: |
+          set -euo pipefail
+          git config user.name "runner-6-pages-observer-bot"
+          git config user.email "runner-6-pages-observer-bot@users.noreply.github.com"
+          for i in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/dsh-console-pages-observer.json dsh-console-pages-observer.json
+            git add dsh-console-pages-observer.json
+            git commit -m "Update DSH Console Pages observer [skip ci]" || exit 0
+            git push origin HEAD:main && exit 0
+            sleep 2
+          done
+          exit 1
