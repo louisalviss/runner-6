@@ -1,5 +1,6 @@
 {
-  "status": "started",
+  "status": "success",
   "run_id": "32252362227",
-  "sha": "0f670320af736c79946e7d06ae9dcdcee98feaa5"
+  "sha": "0f670320af736c79946e7d06ae9dcdcee98feaa5",
+  "page_url": "https://louisalviss.github.io/runner-6/"
 }
