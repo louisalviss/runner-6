@@ -16,17 +16,39 @@ When the user asks to find, source, inspect, or download media from the web:
 1. Understand the semantic request first. Do not require the user to provide a URL when they asked you to find one.
 2. Use the Playwright MCP browser to search/navigate the requested site and inspect real results. For YouTube requests, search YouTube (or a search-engine result pointing to YouTube if YouTube search is blocked) and resolve a concrete `youtube.com/watch` or `youtu.be` URL. Never invent a URL.
 3. Prefer a result that matches the requested subject. If the user names an official source/channel, prefer it when available.
-4. **YouTube fast path:** once a search-result snapshot exposes a matching `/watch?v=...` link, that is enough. Canonicalize it to `https://www.youtube.com/watch?v=VIDEO_ID`. Do not open/play the video merely to validate it unless the search result is genuinely ambiguous.
-5. Never attempt to extract browser cookies, log in, inspect account storage, or work around YouTube player Error 153 for an ordinary public-video sourcing task.
-6. Once the URL is selected, do **not** run yt-dlp inside the DSH turn. Queue the worker download and finish promptly:
+4. Apply the media-selection policy below before choosing the final URL.
+5. **YouTube fast path:** once a search-result snapshot exposes a matching `/watch?v=...` link and enough metadata to satisfy the selection policy, that is enough. Canonicalize it to `https://www.youtube.com/watch?v=VIDEO_ID`. Do not open/play the video merely to validate it unless the search result is genuinely ambiguous.
+6. Never attempt to extract browser cookies, log in, inspect account storage, or work around YouTube player Error 153 for an ordinary public-video sourcing task.
+7. Once the URL is selected, do **not** run yt-dlp inside the DSH turn. Queue the worker download and finish promptly:
 
    `bash scripts/dsh-request-download.sh 'VIDEO_URL' 720 'short descriptive label'`
 
-   Use `360` instead of `720` when a small preview is sufficient.
-7. A straightforward single-video request should normally use one browser search and one `dsh-request-download.sh` call. After the request script succeeds, respond with the selected source URL and say that the Runner handoff download was queued.
-8. The Runner executes `scripts/dsh-download-media.sh` after DSH exits. Successful media is saved under `dsh-handoff/downloads/`; `dsh-handoff/handoff.json` records source URL, relative path and byte size; Actions uploads `dsh-handoff/` as a short-lived plaintext artifact that ChatGPT/GPT can retrieve.
-9. If the source blocks the worker download, the workflow must report that failure instead of DSH starting a browser/cookie bypass loop.
-10. Never commit downloaded media into git.
+   Use `360` instead of `720` only when the user requests a small preview or bandwidth-saving result.
+8. A straightforward single-video request should normally use one browser search and one `dsh-request-download.sh` call. After the request script succeeds, respond with the selected source URL and say that the Runner handoff download was queued.
+9. The Runner executes `scripts/dsh-download-media.sh` after DSH exits. Successful media is saved under `dsh-handoff/downloads/`; `dsh-handoff/handoff.json` records source URL, relative path and byte size; Actions uploads `dsh-handoff/` as a short-lived plaintext artifact that ChatGPT/GPT can retrieve.
+10. If the source blocks the worker download, the workflow must report that failure instead of DSH starting a browser/cookie bypass loop.
+11. Never commit downloaded media into git.
+
+## Default media-selection policy
+
+Explicit user constraints always win. If the user specifies a duration, source/channel, exact video, resolution, format, or other selection criterion, follow it instead of these defaults.
+
+When the user asks generically for a clip/video to use as source material, editing material, a fight/action scene, a highlight, or a topical example and gives no duration constraint:
+
+1. Prefer a **focused clip**, not a compilation, full episode, full movie, playlist, livestream, reaction, commentary video, or multi-hour upload.
+2. Target **3–15 minutes** by default.
+3. A result in the **1–20 minute** range is acceptable when it is a materially better semantic match.
+4. Avoid results **over 30 minutes** unless the user explicitly asks for long-form/compilation/full-length material or no credible shorter match exists. Do not pick a 1-hour+ upload merely because it appears first.
+5. For fight/action requests, prefer a video whose title/snippet clearly refers to the requested characters/event/action rather than a broad franchise compilation.
+6. Inspect durations visible in the search-result snapshot before choosing. Compare at least the first few plausible results when duration is visible; do not blindly select result #1.
+7. Request **720p** by default. If search metadata visibly indicates HD/1080p/4K, prefer that source over an otherwise equivalent low-quality source. Never claim a resolution that was not actually observed; the worker may fall back below 720p if the selected upload has no 720p representation.
+8. Prefer a clean source over reuploads with large commentary overlays, reaction framing, or unrelated edits when that distinction is visible.
+9. Prefer official/authorized sources when the user asks for them or when an official source is clearly available and otherwise comparable.
+10. If no candidate satisfies the preferred duration, choose the best semantic match inside the acceptable range and state the observed duration in the response. If only very long candidates exist, mention that rather than silently choosing a 1-hour+ video.
+
+For a normal single-video selection, the decision order is:
+
+`explicit user constraints > semantic match > focused 3–15 min clip > source quality/authority > search ranking`
 
 ## Security
 
