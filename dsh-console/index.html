@@ -2,65 +2,84 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0b0d10">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#111111">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="DSH Console">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DSH Chat">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <link rel="manifest" href="./manifest.webmanifest">
-<title>DSH Console</title>
+<title>DSH Chat</title>
 <style>
-:root{color-scheme:dark;--bg:#0b0d10;--panel:#12151a;--line:#252a31;--muted:#8b949e;--text:#f0f3f6;--ok:#63d297;--warn:#e3b341;--bad:#ff7474}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}.wrap{max-width:760px;margin:auto;padding:20px 12px 40px}.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.brand{display:flex;gap:10px;align-items:center}.dot{width:11px;height:11px;border-radius:50%;background:#666}.dot.started,.dot.queued,.dot.in_progress{background:var(--warn)}.dot.success,.dot.success_tool_smoke,.dot.completed{background:var(--ok)}.dot.error,.dot.missing_openrouter_key,.dot.tool_smoke_mismatch,.dot.failure{background:var(--bad)}h1{font-size:19px;margin:0}.sub,.tiny{color:var(--muted);font-size:11px;line-height:1.45}.badge{border:1px solid var(--line);border-radius:999px;padding:6px 9px;font-size:11px;color:var(--muted)}.card{background:var(--panel);border:1px solid var(--line);border-radius:17px;padding:14px;margin-bottom:12px}label{display:block;color:var(--muted);font-size:12px;margin-bottom:8px}input,textarea{width:100%;background:#0d1014;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:13px;font:inherit;outline:none}textarea{min-height:180px;resize:vertical;font-size:16px;line-height:1.45}.tokenrow{display:grid;grid-template-columns:1fr auto;gap:8px}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.actions .send{grid-column:1/-1}button,.btn{min-height:44px;border-radius:12px;border:1px solid var(--line);padding:0 14px;font-weight:650;font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none;cursor:pointer}.send{background:#f0f3f6;color:#090b0e;border:0}.secondary,.btn{background:#1b2027;color:var(--text)}.danger{background:#241719;color:#ff8d8d;border-color:#442428}button:disabled{opacity:.45}.token-tools{display:flex;gap:8px;align-items:center;margin-top:10px}.token-tools .btn{min-height:36px;font-size:12px;padding:0 11px}.remember{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);margin:0}.remember input{width:auto}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px}.meta div{border:1px solid var(--line);border-radius:11px;padding:9px}.meta span{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}.meta strong{font-size:12px;word-break:break-word}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:520px;overflow:auto}.statusbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.hidden{display:none!important}.errorText{color:#ff9a9a}.okText{color:#83dda9}@media(max-width:520px){.meta{grid-template-columns:1fr}}
+:root{color-scheme:dark;--bg:#111;--panel:#171717;--panel2:#212121;--line:#303030;--text:#ececec;--muted:#9b9b9b;--user:#2f2f2f;--accent:#fff;--green:#56c596;--yellow:#e5b84b;--red:#ff7777}*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}body{overflow:hidden}.app{height:100dvh;display:flex;flex-direction:column}.topbar{height:58px;padding:env(safe-area-inset-top) 14px 0;border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;flex:none;background:rgba(17,17,17,.94);backdrop-filter:blur(18px);z-index:4}.brand{display:flex;align-items:center;gap:9px;min-width:0}.orb{width:10px;height:10px;border-radius:50%;background:#777;box-shadow:0 0 0 4px rgba(255,255,255,.04);flex:none}.orb.started,.orb.queued,.orb.in_progress{background:var(--yellow)}.orb.success,.orb.success_tool_smoke,.orb.completed{background:var(--green)}.orb.error,.orb.failure,.orb.missing_openrouter_key,.orb.tool_smoke_mismatch{background:var(--red)}.title{font-size:15px;font-weight:650;white-space:nowrap}.state{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}.iconbtn{width:38px;height:38px;border:0;border-radius:11px;background:transparent;color:var(--text);font-size:21px;display:grid;place-items:center}.chat{flex:1;overflow-y:auto;overscroll-behavior:contain;padding:20px 13px 18px;scroll-behavior:smooth}.empty{max-width:560px;margin:16vh auto 0;text-align:center;color:var(--muted)}.empty .logo{width:44px;height:44px;border-radius:15px;background:#f3f3f3;color:#111;display:grid;place-items:center;font-weight:800;font-size:18px;margin:0 auto 14px}.empty h2{font-size:20px;color:var(--text);margin:0 0 6px}.empty p{font-size:13px;line-height:1.5;margin:0}.turn{max-width:760px;margin:0 auto 22px;display:flex;flex-direction:column}.turn.user{align-items:flex-end}.bubble{max-width:min(86%,640px);font-size:15px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.user .bubble{background:var(--user);padding:10px 14px;border-radius:20px 20px 5px 20px}.assistant .bubble{padding:3px 2px}.meta{font-size:10px;color:#717171;margin-top:6px;padding:0 3px}.assistant .meta{display:flex;gap:8px;align-items:center}.runlink{color:#8e8e8e;text-decoration:none}.typing{display:inline-flex;gap:4px;align-items:center;height:24px}.typing i{width:5px;height:5px;border-radius:50%;background:#8d8d8d;animation:b 1.1s infinite}.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}@keyframes b{0%,60%,100%{opacity:.35;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}.errorbubble{color:#ff9a9a}.composer-wrap{flex:none;padding:8px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(0deg,var(--bg) 70%,rgba(17,17,17,0));z-index:3}.composer{max-width:760px;margin:auto;background:var(--panel2);border:1px solid #303030;border-radius:25px;padding:9px 9px 9px 15px;display:flex;gap:9px;align-items:flex-end;box-shadow:0 8px 35px rgba(0,0,0,.2)}textarea{flex:1;min-height:24px;max-height:150px;padding:4px 0;border:0;outline:0;resize:none;background:transparent;color:var(--text);font:16px/1.42 inherit}.send{width:34px;height:34px;border-radius:50%;border:0;background:#f1f1f1;color:#111;display:grid;place-items:center;font-size:18px;font-weight:800;flex:none}.send:disabled{background:#555;color:#222}.hint{max-width:760px;margin:5px auto 0;text-align:center;color:#626262;font-size:10px}.sheet-back{position:fixed;inset:0;background:rgba(0,0,0,.52);z-index:10;display:none}.sheet-back.show{display:block}.sheet{position:absolute;left:0;right:0;bottom:0;background:#1b1b1b;border-top:1px solid #333;border-radius:24px 24px 0 0;padding:12px 16px calc(18px + env(safe-area-inset-bottom));max-height:78dvh;overflow:auto}.grab{width:38px;height:4px;border-radius:9px;background:#555;margin:0 auto 18px}.sheet h3{margin:0 0 16px;font-size:18px}.label{font-size:12px;color:var(--muted);margin:13px 0 7px}.keyrow{display:flex;gap:8px}.keyrow input{min-width:0;flex:1;background:#111;border:1px solid #383838;border-radius:13px;color:var(--text);font:14px ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px}.btn{border:1px solid #3a3a3a;background:#272727;color:var(--text);border-radius:12px;min-height:42px;padding:0 13px;font-weight:600}.btn.full{width:100%;margin-top:9px}.btn.danger{color:#ff9292}.small{font-size:11px;color:#858585;line-height:1.5;margin-top:8px}.sheet a{color:#bdbdbd}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.hidden{display:none!important}@media(min-width:760px){.sheet{width:480px;left:50%;right:auto;transform:translateX(-50%);bottom:24px;border:1px solid #343434;border-radius:24px}.composer-wrap{padding-bottom:18px}}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="head"><div class="brand"><div id="dot" class="dot"></div><div><h1>DSH Console</h1><div class="sub">Runner 6 · OpenRouter · DeepSeek V4 Pro</div></div></div><div class="badge">DIRECT</div></div>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div id="orb" class="orb"></div><div><div class="title">DeepSeek Harness</div><div id="state" class="state">Runner 6 · ready</div></div></div>
+    <button id="settingsBtn" class="iconbtn" aria-label="Settings">⋯</button>
+  </header>
 
-  <section class="card">
-    <label>GitHub token</label>
-    <div class="tokenrow"><input id="token" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="show" class="secondary" type="button">Show</button></div>
-    <div class="token-tools"><a class="btn" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create token</a><label class="remember"><input id="remember" type="checkbox">Remember</label></div>
-    <div class="tiny" style="margin-top:9px">Fine-grained token: repository <b>runner-6</b> · <b>Actions: Read and write</b>. Reads work without a token; sending/cancelling requires it.</div>
-  </section>
+  <main id="chat" class="chat">
+    <div id="empty" class="empty"><div class="logo">DS</div><h2>What can I do for you?</h2><p>Messages go directly to DSH on Runner 6.</p></div>
+  </main>
 
-  <section class="card">
-    <label>Task — sent exactly as typed</label>
-    <textarea id="task" placeholder="Tell DSH what to do…"></textarea>
-    <div class="tiny"><span id="chars">0</span> characters · ChatGPT is not in this request path.</div>
-    <div class="actions"><button id="send" class="send" type="button">Send to DSH</button><button id="cancel" class="danger" type="button" disabled>Cancel run</button><a id="openRun" class="btn hidden" target="_blank" rel="noopener noreferrer">Open run</a></div>
-  </section>
-
-  <section class="card">
-    <div class="statusbar"><strong id="statusText">Loading…</strong><button id="refresh" class="secondary" type="button">Refresh</button></div>
-    <div class="meta"><div><span>Run</span><strong id="runId">—</strong></div><div><span>Status</span><strong id="runStatus">—</strong></div><div><span>Provider</span><strong id="provider">openrouter-v4</strong></div><div><span>Model</span><strong id="model">deepseek/deepseek-v4-pro</strong></div></div>
-  </section>
-
-  <section id="resultCard" class="card hidden"><label>DSH response</label><pre id="result"></pre></section>
+  <div class="composer-wrap">
+    <div class="composer"><textarea id="input" rows="1" placeholder="Message DSH"></textarea><button id="send" class="send" aria-label="Send">↑</button></div>
+    <div class="hint">Direct · OpenRouter · DeepSeek V4 Pro</div>
+  </div>
 </div>
+
+<div id="sheetBack" class="sheet-back">
+  <section class="sheet" role="dialog" aria-modal="true">
+    <div class="grab"></div>
+    <h3>DSH settings</h3>
+    <div class="label">GitHub key</div>
+    <div class="keyrow"><input id="token" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="showKey" class="btn">Show</button></div>
+    <div class="small">Saved automatically in this browser using localStorage. It is used only for GitHub API requests from this page.</div>
+    <a class="btn full" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Create fine-grained token</a>
+    <div class="small">Token scope: repository <b>runner-6</b> · Actions: <b>Read and write</b>.</div>
+    <div class="row"><button id="clearChat" class="btn">Clear chat</button><button id="clearKey" class="btn danger">Clear key</button></div>
+    <button id="closeSheet" class="btn full">Done</button>
+  </section>
+</div>
+
 <script>
 (()=>{'use strict';
 const OWNER='louisalviss',REPO='runner-6',WORKFLOW='dsh-openrouter.yml',REF='main';
 const API=`https://api.github.com/repos/${OWNER}/${REPO}`;
-const $=id=>document.getElementById(id),token=$('token'),remember=$('remember'),task=$('task'),send=$('send'),cancel=$('cancel');
-let activeRunId=null,baselineRunId=null,pollTimer=null;
-const saved=localStorage.getItem('dsh_token');token.value=saved||sessionStorage.getItem('dsh_token')||'';remember.checked=!!saved;
-function saveToken(){const v=token.value.trim();sessionStorage.setItem('dsh_token',v);if(remember.checked)localStorage.setItem('dsh_token',v);else localStorage.removeItem('dsh_token')}
-token.onchange=saveToken;remember.onchange=saveToken;$('show').onclick=()=>{token.type=token.type==='password'?'text':'password';$('show').textContent=token.type==='password'?'Show':'Hide'};task.oninput=()=>{$('chars').textContent=task.value.length};
-function apiHeaders(requireToken=false){const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};const t=token.value.trim();if(t)h.Authorization=`Bearer ${t}`;if(requireToken&&!t)throw Error('Paste a GitHub token first.');return h}
-async function api(path,opts={},requireToken=false){const r=await fetch(API+path,{...opts,cache:'no-store',headers:{...apiHeaders(requireToken),...(opts.headers||{})}});if(r.status===204)return null;const txt=await r.text();let data;try{data=txt?JSON.parse(txt):null}catch{data=txt}if(!r.ok)throw Error(data?.message||`GitHub HTTP ${r.status}`);return data}
-function decodeBase64Utf8(s){const bin=atob((s||'').replace(/\n/g,''));const bytes=Uint8Array.from(bin,c=>c.charCodeAt(0));return new TextDecoder().decode(bytes)}
-async function repoJson(path){const d=await api(`/contents/${path}?ref=${REF}&_=${Date.now()}`);return JSON.parse(decodeBase64Utf8(d.content))}
-function setStatus(text,kind=''){const el=$('statusText');el.textContent=text;el.className=kind==='error'?'errorText':kind==='ok'?'okText':''}
-function paintStatus(s){const st=s?.status||'unknown';$('dot').className=`dot ${st}`;$('runId').textContent=s?.run_id||'—';$('runStatus').textContent=st;$('provider').textContent=s?.provider||'openrouter-v4';$('model').textContent=s?.model||'deepseek/deepseek-v4-pro';if(s?.run_id){activeRunId=String(s.run_id);$('openRun').href=`https://github.com/${OWNER}/${REPO}/actions/runs/${activeRunId}`;$('openRun').classList.remove('hidden')}cancel.disabled=st!=='started';if(st==='started')setStatus('DSH is running…');else if(st.startsWith('success'))setStatus('Completed','ok');else if(st==='error'||st==='failure')setStatus(st,'error');else setStatus(st)}
-async function showResultFor(runId){const r=await repoJson('dsh-result.json');if(String(r.run_id)!==String(runId))return false;$('result').textContent=r.output||r.stderr||JSON.stringify(r,null,2);$('resultCard').classList.remove('hidden');send.disabled=false;cancel.disabled=true;return true}
-async function refresh(showErrors=true){try{const s=await repoJson('dsh-status.json');paintStatus(s);if(s?.run_id&&s.status!=='started'){await showResultFor(s.run_id);if(baselineRunId&&String(s.run_id)!==String(baselineRunId))stopPoll()}return s}catch(e){if(showErrors)setStatus(e.message,'error');return null}}
-function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null}}
-function startPoll(){stopPoll();pollTimer=setInterval(()=>refresh(false),2500)}
-send.onclick=async()=>{const text=task.value;if(!text.trim()){setStatus('Task is empty.','error');return}try{saveToken();const current=await refresh(false);baselineRunId=current?.run_id||null;send.disabled=true;cancel.disabled=true;$('resultCard').classList.add('hidden');$('dot').className='dot queued';$('runStatus').textContent='queued';setStatus('Sending exact task…');await api(`/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:REF,inputs:{task:text}})},true);setStatus('Sent. Waiting for Runner 6…');startPoll();setTimeout(()=>refresh(true),900)}catch(e){send.disabled=false;$('dot').className='dot error';setStatus(e.message,'error')}};
-cancel.onclick=async()=>{if(!activeRunId)return;try{cancel.disabled=true;setStatus('Cancelling…');await api(`/actions/runs/${activeRunId}/cancel`,{method:'POST'},true);startPoll()}catch(e){setStatus(e.message,'error');cancel.disabled=false}};
-$('refresh').onclick=()=>refresh(true);refresh(true);
+const $=id=>document.getElementById(id),chat=$('chat'),empty=$('empty'),input=$('input'),send=$('send'),token=$('token');
+const KEY='dsh_token',HIST='dsh_chat_history_v1';
+let messages=[],baselineRunId=null,pollTimer=null,pendingLocalId=null,activeRunId=null;
+
+function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(KEY)||'';render();refresh(true)}
+function saveHistory(){localStorage.setItem(HIST,JSON.stringify(messages.slice(-100)))}
+function now(){return Date.now()}
+function add(role,text,extra={}){const m={id:crypto.randomUUID?crypto.randomUUID():String(now()+Math.random()),role,text,ts:now(),...extra};messages.push(m);saveHistory();render();return m}
+function updateMsg(id,patch){const m=messages.find(x=>x.id===id);if(m){Object.assign(m,patch);saveHistory();render()}}
+function escText(el,text){el.textContent=text||''}
+function render(){chat.querySelectorAll('.turn').forEach(n=>n.remove());empty.classList.toggle('hidden',messages.length>0);for(const m of messages){const turn=document.createElement('div');turn.className=`turn ${m.role}`;turn.dataset.id=m.id;const bubble=document.createElement('div');bubble.className='bubble'+(m.error?' errorbubble':'');if(m.pending){const t=document.createElement('span');t.className='typing';t.innerHTML='<i></i><i></i><i></i>';bubble.appendChild(t)}else escText(bubble,m.text);turn.appendChild(bubble);if(m.role==='assistant'&&(m.runId||m.error)){const meta=document.createElement('div');meta.className='meta';if(m.runId){const a=document.createElement('a');a.className='runlink';a.target='_blank';a.rel='noopener noreferrer';a.href=`https://github.com/${OWNER}/${REPO}/actions/runs/${m.runId}`;a.textContent=`Run ${m.runId}`;meta.appendChild(a)}if(m.error){const s=document.createElement('span');s.textContent='Error';meta.appendChild(s)}turn.appendChild(meta)}chat.appendChild(turn)}requestAnimationFrame(()=>{chat.scrollTop=chat.scrollHeight})}
+function resize(){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,150)+'px'}
+input.addEventListener('input',resize);
+
+function headers(requireToken=false){const h={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};const t=token.value.trim();if(t)h.Authorization=`Bearer ${t}`;if(requireToken&&!t)throw Error('Add your GitHub key in Settings first.');return h}
+async function api(path,opts={},requireToken=false){const r=await fetch(API+path,{...opts,cache:'no-store',headers:{...headers(requireToken),...(opts.headers||{})}});if(r.status===204)return null;const txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d=txt}if(!r.ok)throw Error(d?.message||`GitHub HTTP ${r.status}`);return d}
+function decode64(s){const bin=atob((s||'').replace(/\n/g,''));return new TextDecoder().decode(Uint8Array.from(bin,c=>c.charCodeAt(0)))}
+async function repoJson(path){const d=await api(`/contents/${path}?ref=${REF}&_=${Date.now()}`);return JSON.parse(decode64(d.content))}
+function paintStatus(s){const st=s?.status||'ready';$('orb').className=`orb ${st}`;activeRunId=s?.run_id?String(s.run_id):null;if(st==='started')$('state').textContent='Runner 6 · working…';else if(st.startsWith('success'))$('state').textContent='Runner 6 · ready';else if(st==='error'||st==='failure')$('state').textContent='Runner 6 · error';else $('state').textContent=`Runner 6 · ${st}`}
+async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');paintStatus(s);if(s?.run_id&&s.status!=='started'){const r=await repoJson('dsh-result.json');if(String(r.run_id)===String(s.run_id)){const already=messages.some(m=>m.role==='assistant'&&String(m.runId||'')===String(s.run_id));if(pendingLocalId){updateMsg(pendingLocalId,{pending:false,text:r.output||r.stderr||'(No text response)',runId:String(s.run_id),error:s.status==='error'});pendingLocalId=null;send.disabled=false;stopPoll()}else if(!already&&messages.length===0){add('assistant',r.output||r.stderr||'(No text response)',{runId:String(s.run_id),error:s.status==='error'})}}}return s}catch(e){if(!silent&&pendingLocalId){updateMsg(pendingLocalId,{pending:false,text:e.message,error:true});pendingLocalId=null;send.disabled=false;stopPoll()}return null}}
+function startPoll(){stopPoll();pollTimer=setInterval(()=>refresh(false),2200)}function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null}}
+
+async function sendMessage(){const text=input.value;if(!text.trim()||send.disabled)return;try{const current=await refresh(true);baselineRunId=current?.run_id||null;add('user',text);input.value='';resize();send.disabled=true;const p=add('assistant','',{pending:true});pendingLocalId=p.id;$('orb').className='orb queued';$('state').textContent='Runner 6 · queued';await api(`/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:REF,inputs:{task:text}})},true);startPoll();setTimeout(()=>refresh(false),900)}catch(e){if(pendingLocalId){updateMsg(pendingLocalId,{pending:false,text:e.message,error:true});pendingLocalId=null}else add('assistant',e.message,{error:true});send.disabled=false;$('orb').className='orb error';$('state').textContent='Runner 6 · error';if(e.message.includes('GitHub key'))openSheet()}}
+send.onclick=sendMessage;
+input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&window.innerWidth>700){e.preventDefault();sendMessage()}});
+
+const sheet=$('sheetBack');function openSheet(){sheet.classList.add('show');setTimeout(()=>token.focus(),100)}function closeSheet(){sheet.classList.remove('show')}$('settingsBtn').onclick=openSheet;$('closeSheet').onclick=closeSheet;sheet.addEventListener('click',e=>{if(e.target===sheet)closeSheet()});
+token.addEventListener('input',()=>{localStorage.setItem(KEY,token.value.trim())});$('showKey').onclick=()=>{token.type=token.type==='password'?'text':'password';$('showKey').textContent=token.type==='password'?'Show':'Hide'};
+$('clearKey').onclick=()=>{localStorage.removeItem(KEY);token.value='';};$('clearChat').onclick=()=>{messages=[];localStorage.removeItem(HIST);render()};
+load();if(!token.value)setTimeout(openSheet,250);
 })();
 </script>
-<!-- deploy-v2-trigger -->
-</body></html>
+</body>
+</html>
