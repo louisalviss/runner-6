@@ -1,0 +1,9 @@
+{
+  "run_id": "32314220489",
+  "model_id": "deepseek/deepseek-v4-flash",
+  "dsh_exit_code": "124",
+  "agent_seconds": 241,
+  "download_exit_code": "",
+  "download_seconds": 0,
+  "artifact_present": false
+}
