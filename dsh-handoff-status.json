@@ -1,1 +1,1 @@
-{"status":"started","run_id":"32283245274","client_id":"smoke2_178b3a38c7b3593704c9f5b5728f2462","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","artifact_present":false}
+{"status":"success","run_id":"32283245274","client_id":"smoke2_178b3a38c7b3593704c9f5b5728f2462","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","artifact_present":false}
