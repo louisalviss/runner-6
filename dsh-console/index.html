@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0d10" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="DSH Console" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%230b0d10'/%3E%3Cpath d='M26 28h30c14 0 23 8 23 22S70 72 56 72H26V28Zm13 12v20h15c7 0 11-3 11-10s-4-10-11-10H39Z' fill='%23f5f5f5'/%3E%3C/svg%3E" />
+  <title>DSH Console</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0d10; --panel:#12151a; --line:#252a31; --muted:#8b949e; --text:#f0f3f6; --accent:#f0f3f6; --danger:#ff6b6b; --ok:#63d297; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif; }
+    body { padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+    .wrap { width:min(760px,100%); margin:0 auto; padding:22px 16px 44px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; }
+    .brand { display:flex; align-items:center; gap:11px; }
+    .dot { width:12px; height:12px; border-radius:50%; background:#666; box-shadow:0 0 0 4px rgba(255,255,255,.04); }
+    .dot.started { background:#e3b341; }
+    .dot.success,.dot.success_tool_smoke { background:var(--ok); }
+    .dot.error,.dot.missing_openrouter_key,.dot.tool_smoke_mismatch { background:var(--danger); }
+    h1 { margin:0; font-size:19px; letter-spacing:-.02em; font-weight:650; }
+    .sub { color:var(--muted); font-size:12px; margin-top:2px; }
+    .badge { border:1px solid var(--line); border-radius:999px; padding:6px 9px; color:var(--muted); font-size:11px; white-space:nowrap; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:14px; margin-bottom:12px; }
+    label { display:block; color:var(--muted); font-size:12px; margin:0 0 8px 2px; }
+    input,textarea { width:100%; border:1px solid var(--line); background:#0d1014; color:var(--text); border-radius:13px; outline:none; font:inherit; }
+    input:focus,textarea:focus { border-color:#4b535e; }
+    input { padding:13px 14px; }
+    textarea { padding:14px; min-height:170px; resize:vertical; line-height:1.45; font-size:16px; }
+    .row { display:flex; gap:9px; align-items:center; }
+    .row > * { flex:1; }
+    button,a.btn { appearance:none; border:0; border-radius:13px; min-height:46px; padding:0 15px; font-size:15px; font-weight:650; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; text-decoration:none; }
+    button.primary { background:var(--accent); color:#090b0e; }
+    button.secondary,a.btn { background:#1b2027; color:var(--text); border:1px solid var(--line); }
+    button.danger { color:#ff8d8d; background:#241719; border:1px solid #442428; }
+    button:disabled { opacity:.42; cursor:not-allowed; }
+    .tokenline { display:grid; grid-template-columns:1fr auto; gap:8px; }
+    .tiny { color:var(--muted); font-size:11px; line-height:1.45; margin-top:8px; }
+    .check { display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px; margin-top:10px; }
+    .check input { width:auto; accent-color:#fff; }
+    .meta { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .meta div { border:1px solid var(--line); border-radius:12px; padding:10px 11px; min-width:0; }
+    .meta span { display:block; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
+    .meta strong { display:block; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    pre { margin:0; white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; max-height:420px; overflow:auto; }
+    .statusline { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:11px; }
+    .statusline strong { font-size:14px; }
+    .flash { animation:flash .6s ease; }
+    @keyframes flash { 0%{transform:scale(.995);opacity:.6} 100%{transform:none;opacity:1} }
+    .hidden { display:none !important; }
+    @media (max-width:520px) { .wrap{padding-left:12px;padding-right:12px}.meta{grid-template-columns:1fr}.row.actions{display:grid;grid-template-columns:1fr 1fr}.row.actions .primary{grid-column:1/-1} }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div id="statusDot" class="dot"></div>
+      <div><h1>DSH Console</h1><div class="sub">Runner 6 · OpenRouter · DeepSeek V4 Pro</div></div>
+    </div>
+    <div class="badge">DIRECT</div>
+  </header>
+
+  <section class="card">
+    <label for="token">GitHub token</label>
+    <div class="tokenline">
+      <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…" />
+      <button id="showToken" class="secondary" type="button">Show</button>
+    </div>
+    <label class="check"><input id="remember" type="checkbox" /> Remember on this device</label>
+    <div class="tiny">Use a fine-grained token restricted to <b>runner-6</b> with only <b>Actions: Read and write</b>. The token is sent only to api.github.com. By default it is kept for this browser session only.</div>
+  </section>
+
+  <section class="card">
+    <label for="task">Task — sent exactly as typed</label>
+    <textarea id="task" placeholder="Tell DSH what to do…" autocapitalize="sentences"></textarea>
+    <div class="tiny"><span id="chars">0</span> characters · ChatGPT is not in this request path.</div>
+    <div class="row actions" style="margin-top:12px">
+      <button id="send" class="primary" type="button">Send to DSH</button>
+      <button id="cancel" class="danger" type="button" disabled>Cancel run</button>
+      <a id="openRun" class="btn hidden" target="_blank" rel="noopener">Open run</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="statusline"><strong id="statusText">Ready</strong><button id="refresh" class="secondary" type="button" style="min-height:34px;padding:0 11px;font-size:12px">Refresh</button></div>
+    <div class="meta">
+      <div><span>Run</span><strong id="runId">—</strong></div>
+      <div><span>Status</span><strong id="runStatus">—</strong></div>
+      <div><span>Provider</span><strong id="provider">openrouter-v4</strong></div>
+      <div><span>Model</span><strong id="model">deepseek/deepseek-v4-pro</strong></div>
+    </div>
+  </section>
+
+  <section id="resultCard" class="card hidden">
+    <label>DSH result</label>
+    <pre id="result"></pre>
+  </section>
+</div>
+<script>
+(() => {
+  'use strict';
+  const OWNER='louisalviss', REPO='runner-6', WORKFLOW='dsh-openrouter.yml', REF='main';
+  const API=`https://api.github.com/repos/${OWNER}/${REPO}`;
+  const RAW=`https://raw.githubusercontent.com/${OWNER}/${REPO}/main`;
+  const $=id=>document.getElementById(id);
+  const token=$('token'), remember=$('remember'), task=$('task'), send=$('send'), cancel=$('cancel');
+  const statusDot=$('statusDot'), statusText=$('statusText'), runId=$('runId'), runStatus=$('runStatus');
+  const provider=$('provider'), model=$('model'), result=$('result'), resultCard=$('resultCard'), openRun=$('openRun');
+  let activeRunId=null, previousRunId=null, pollTimer=null, sentAt=0;
+
+  const saved=localStorage.getItem('dsh_console_token');
+  if(saved){ token.value=saved; remember.checked=true; }
+  else token.value=sessionStorage.getItem('dsh_console_token')||'';
+
+  function saveToken(){
+    const v=token.value.trim();
+    sessionStorage.setItem('dsh_console_token',v);
+    if(remember.checked) localStorage.setItem('dsh_console_token',v); else localStorage.removeItem('dsh_console_token');
+  }
+  token.addEventListener('change',saveToken); remember.addEventListener('change',saveToken);
+  $('showToken').onclick=()=>{ token.type=token.type==='password'?'text':'password'; $('showToken').textContent=token.type==='password'?'Show':'Hide'; };
+  task.addEventListener('input',()=>{$('chars').textContent=task.value.length;});
+
+  async function rawJson(name){
+    const r=await fetch(`${RAW}/${name}?t=${Date.now()}`,{cache:'no-store'});
+    if(!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
+    return r.json();
+  }
+  async function gh(path,opts={}){
+    const t=token.value.trim();
+    if(!t) throw new Error('Enter a GitHub token first.');
+    saveToken();
+    const headers={
+      'Accept':'application/vnd.github+json',
+      'Authorization':`Bearer ${t}`,
+      'X-GitHub-Api-Version':'2022-11-28',
+      ...(opts.headers||{})
+    };
+    const r=await fetch(`${API}${path}`,{...opts,headers});
+    if(r.status===204) return null;
+    const text=await r.text();
+    let data=null; try{data=text?JSON.parse(text):null}catch{data=text}
+    if(!r.ok) throw new Error((data&&data.message)||`GitHub HTTP ${r.status}`);
+    return data;
+  }
+  function paint(s){
+    const st=s?.status||'unknown';
+    statusDot.className=`dot ${st}`;
+    runStatus.textContent=st;
+    runId.textContent=s?.run_id||'—';
+    provider.textContent=s?.provider||'openrouter-v4';
+    model.textContent=s?.model||'deepseek/deepseek-v4-pro';
+    if(s?.run_id){
+      activeRunId=String(s.run_id);
+      openRun.href=`https://github.com/${OWNER}/${REPO}/actions/runs/${s.run_id}`;
+      openRun.classList.remove('hidden');
+      cancel.disabled=!(st==='started');
+    }
+    statusText.textContent=st==='started'?'DSH is running…':(st.startsWith('success')?'Completed':st);
+  }
+  async function refreshStatus(showErrors=false){
+    try{
+      const s=await rawJson('dsh-status.json'); paint(s);
+      if(s.run_id && String(s.run_id)!==String(previousRunId) && s.status!=='started'){
+        const r=await rawJson('dsh-result.json');
+        if(String(r.run_id)===String(s.run_id)){
+          result.textContent=r.output||JSON.stringify(r,null,2);
+          resultCard.classList.remove('hidden'); resultCard.classList.add('flash');
+          send.disabled=false; cancel.disabled=true; stopPoll();
+        }
+      }
+      return s;
+    }catch(e){ if(showErrors) statusText.textContent=e.message; }
+  }
+  function stopPoll(){ if(pollTimer){clearInterval(pollTimer);pollTimer=null;} }
+  function startPoll(){ stopPoll(); pollTimer=setInterval(()=>refreshStatus(false),4000); }
+
+  send.onclick=async()=>{
+    const text=task.value;
+    if(!text.trim()){ statusText.textContent='Task is empty.'; return; }
+    try{
+      send.disabled=true; resultCard.classList.add('hidden'); statusText.textContent='Sending exact task…';
+      const before=await refreshStatus(false); previousRunId=before?.run_id||null; sentAt=Date.now();
+      await gh(`/actions/workflows/${WORKFLOW}/dispatches`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ref:REF,inputs:{task:text}})
+      });
+      statusDot.className='dot started'; statusText.textContent='Sent. Waiting for Runner 6…'; runStatus.textContent='queued';
+      startPoll(); setTimeout(()=>refreshStatus(true),1200);
+    }catch(e){ send.disabled=false; statusDot.className='dot error'; statusText.textContent=e.message; }
+  };
+
+  cancel.onclick=async()=>{
+    if(!activeRunId) return;
+    try{ cancel.disabled=true; statusText.textContent='Cancelling…'; await gh(`/actions/runs/${activeRunId}/cancel`,{method:'POST'}); startPoll(); }
+    catch(e){ statusText.textContent=e.message; cancel.disabled=false; }
+  };
+  $('refresh').onclick=()=>refreshStatus(true);
+  refreshStatus(false);
+})();
+</script>
+</body>
+</html>
