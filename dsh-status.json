@@ -1,1 +1,1 @@
-{"status":"started","run_id":"32303192850","client_id":"b8987234_703b_4d72_b74f_91dad65a2954","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false}
+{"status":"timeout","run_id":"32303192850","client_id":"b8987234_703b_4d72_b74f_91dad65a2954","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":true,"artifact_encrypted":false}
