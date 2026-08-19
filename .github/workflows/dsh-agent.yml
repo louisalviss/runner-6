@@ -26,6 +26,9 @@ jobs:
     timeout-minutes: 45
     env:
       DSH_VERSION: "0.1.0-rc.7"
+      DSH_HOME: ${{ runner.temp }}/dsh-home
+      DSH_PROVIDER: "openrouter-v4"
+      DSH_MODEL: "deepseek/deepseek-v4-pro"
 
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +56,19 @@ jobs:
             exit 2
           fi
 
+          if grep -qx '__SMOKE_TOOL__' "$RUNNER_TEMP/dsh-task.txt"; then
+            TOKEN="DSH_TOOL_OK_$(python - <<'PY'
+          import secrets
+          print(secrets.token_hex(16))
+          PY
+          )"
+            printf '%s\n' "$TOKEN" > dsh-probe.txt
+            printf '%s\n' "$TOKEN" > "$RUNNER_TEMP/dsh-expected.txt"
+            cat > "$RUNNER_TEMP/dsh-task.txt" <<'EOF'
+          Use an available filesystem-reading tool to read the file dsh-probe.txt in the current workspace. You must inspect the file; do not guess its contents. Reply with exactly the file contents and nothing else.
+          EOF
+          fi
+
       - name: Verify official DSH package
         run: |
           set -euo pipefail
@@ -61,31 +77,50 @@ jobs:
           npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --help > "$RUNNER_TEMP/dsh-help.txt"
           head -n 30 "$RUNNER_TEMP/dsh-help.txt"
 
-      - name: Run DSH headless
+      - name: Configure OpenRouter provider
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 32768
+                    input:
+                      - text
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Run DSH headless through OpenRouter
         id: run_dsh
         env:
-          DEEPSEEK_API_KEY_SECRET: ${{ secrets.DEEPSEEK_API_KEY }}
-          DSH_API_KEY_SECRET: ${{ secrets.DSH_API_KEY }}
-          DSH_BASE_URL_SECRET: ${{ secrets.DSH_BASE_URL }}
+          OPENROUTER_API_KEY_SECRET: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -uo pipefail
-
-          API_KEY="${DEEPSEEK_API_KEY_SECRET:-${DSH_API_KEY_SECRET:-}}"
           TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
 
-          if [ -z "$API_KEY" ]; then
-            printf '%s\n' 'No API key secret configured; DSH install smoke test passed.' > "$RUNNER_TEMP/dsh-output.txt"
+          if [ -z "${OPENROUTER_API_KEY_SECRET:-}" ]; then
+            printf '%s\n' 'OPENROUTER_API_KEY repository secret is missing.' > "$RUNNER_TEMP/dsh-output.txt"
             : > "$RUNNER_TEMP/dsh-error.txt"
             echo 'missing_key=true' >> "$GITHUB_OUTPUT"
-            echo 'exit_code=0' >> "$GITHUB_OUTPUT"
+            echo 'exit_code=3' >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          export DEEPSEEK_API_KEY="$API_KEY"
-          if [ -n "${DSH_BASE_URL_SECRET:-}" ]; then
-            export DEEPSEEK_BASE_URL="$DSH_BASE_URL_SECRET"
-          fi
-
+          export OPENROUTER_API_KEY="$OPENROUTER_API_KEY_SECRET"
           set +e
           npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
             > "$RUNNER_TEMP/dsh-output.txt" \
@@ -93,7 +128,7 @@ jobs:
           CODE=$?
           set -e
 
-          echo "missing_key=false" >> "$GITHUB_OUTPUT"
+          echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -111,23 +146,35 @@ jobs:
           task = (tmp / 'dsh-task.txt').read_text(errors='replace') if (tmp / 'dsh-task.txt').exists() else ''
           out = (tmp / 'dsh-output.txt').read_text(errors='replace') if (tmp / 'dsh-output.txt').exists() else ''
           err = (tmp / 'dsh-error.txt').read_text(errors='replace') if (tmp / 'dsh-error.txt').exists() else ''
+          expected = (tmp / 'dsh-expected.txt').read_text(errors='replace').strip() if (tmp / 'dsh-expected.txt').exists() else None
           missing = os.environ.get('DSH_MISSING_KEY') == 'true'
           try:
-              code = int(os.environ.get('DSH_EXIT_CODE') or 0)
+              code = int(os.environ.get('DSH_EXIT_CODE') or 1)
           except ValueError:
               code = 1
 
+          tool_smoke = expected is not None
+          tool_smoke_passed = tool_smoke and out.strip() == expected
+
           if missing:
-              status = 'installed_no_api_key'
-          elif code == 0:
-              status = 'success'
-          else:
+              status = 'missing_openrouter_key'
+          elif code != 0:
               status = 'error'
+          elif tool_smoke and tool_smoke_passed:
+              status = 'success_tool_smoke'
+          elif tool_smoke:
+              status = 'tool_smoke_mismatch'
+          else:
+              status = 'success'
 
           result = {
               'status': status,
+              'provider': os.environ.get('DSH_PROVIDER'),
+              'model': os.environ.get('DSH_MODEL'),
               'dsh_version': os.environ.get('DSH_VERSION'),
               'exit_code': code,
+              'tool_smoke': tool_smoke,
+              'tool_smoke_passed': tool_smoke_passed,
               'task': task[:20000],
               'output': out[:100000],
               'stderr': err[:50000],
@@ -152,17 +199,18 @@ jobs:
           git config user.name "runner-6-dsh-bot"
           git config user.email "runner-6-dsh-bot@users.noreply.github.com"
           git add dsh-result.json
-          git commit -m "Update DSH result [skip ci]" || exit 0
+          git commit -m "Update DSH OpenRouter result [skip ci]" || exit 0
           git pull --rebase origin main
           git push
 
-      - name: Fail if DSH task failed
+      - name: Validate result
         if: always()
-        env:
-          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
         run: |
-          CODE="${DSH_EXIT_CODE:-0}"
-          if [ "$CODE" != "0" ]; then
-            echo "DSH exited with code $CODE" >&2
-            exit "$CODE"
-          fi
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('dsh-result.json').read_text())
+          if result['status'] not in {'success', 'success_tool_smoke'}:
+              raise SystemExit(f"DSH validation failed: {result['status']}")
+          print(f"DSH validation passed: {result['status']}")
+          PY
