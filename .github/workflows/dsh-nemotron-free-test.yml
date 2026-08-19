@@ -1,0 +1,155 @@
+name: DSH Nemotron Free Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-nemotron-free-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      MODEL_ID: nvidia/nemotron-3-ultra-550b-a55b:free
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home-nemotron" >> "$GITHUB_ENV"
+      - name: Configure OpenRouter model
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-nemotron:
+                displayName: OpenRouter Nemotron Free
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: "nvidia/nemotron-3-ultra-550b-a55b:free"
+                    name: "Nemotron 3 Ultra Free"
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-nemotron
+            model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+      - name: Activate runtime
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+      - name: Run Nemotron DSH test
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff .dsh-download-request.json
+          mkdir -p dsh-handoff
+          TASK='Find the exact music track METAMORPHOSIS by INTERWORLD using the Playwright browser. The target is the canonical ORIGINAL track. Do not choose Slowed, Slowed + Reverb, Sped Up, remix, edit, METAMORPHOSIS 2, compilation, reaction, or repost when an official artist/label/Topic source is available. Independently verify title, artist, source cleanliness, and version. Then queue audio with: bash scripts/dsh-request-audio.sh SOURCE_URL "INTERWORLD - METAMORPHOSIS". Do not run yt-dlp yourself. Create dsh-handoff/selection.json with selected_title, artist, selected_url, reason, evidence. Finish with DSH_FREE_QUEUED.'
+          START=$(date +%s)
+          set +e
+          timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          END=$(date +%s)
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "agent_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+      - name: Execute queued download
+        id: download
+        if: steps.dsh.outputs.exit_code == '0'
+        working-directory: workspace
+        run: |
+          set -uo pipefail
+          START=$(date +%s)
+          CODE=1
+          if [ -s .dsh-download-request.json ]; then
+            URL="$(python - <<'PY'
+          import json
+          print(json.load(open('.dsh-download-request.json'))['url'])
+          PY
+            )"
+            bash scripts/dsh-download-media.sh "$URL" 720
+            CODE=$?
+          fi
+          END=$(date +%s)
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "download_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Build and publish result
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DSH_CODE: ${{ steps.dsh.outputs.exit_code }}
+          AGENT_SECONDS: ${{ steps.dsh.outputs.agent_seconds }}
+          DOWNLOAD_CODE: ${{ steps.download.outputs.exit_code }}
+          DOWNLOAD_SECONDS: ${{ steps.download.outputs.download_seconds }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result={
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'model_id':os.environ['MODEL_ID'],
+            'dsh_exit_code':os.environ.get('DSH_CODE',''),
+            'agent_seconds':int(os.environ.get('AGENT_SECONDS') or 0),
+            'download_exit_code':os.environ.get('DOWNLOAD_CODE',''),
+            'download_seconds':int(os.environ.get('DOWNLOAD_SECONDS') or 0),
+          }
+          for key,path in [('selection','dsh-handoff/selection.json'),('handoff','dsh-handoff/handoff.json')]:
+            p=Path(path)
+            if p.exists():
+              try: result[key]=json.loads(p.read_text())
+              except Exception as e: result[key+'_error']=str(e)
+          h=result.get('handoff',{})
+          rel=h.get('relative_path')
+          result['artifact_present']=bool(rel and Path(rel).exists() and Path(rel).stat().st_size>0)
+          Path('dsh-handoff/nemotron-result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+          PY
+          cp "$RUNNER_TEMP/dsh-output.txt" dsh-handoff/dsh-output.txt || true
+          cp "$RUNNER_TEMP/dsh-error.txt" dsh-handoff/dsh-error.txt || true
+          C="$(base64 -w0 dsh-handoff/nemotron-result.json)"
+          F="dsh-nemotron-free-status.json"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH Nemotron free status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH Nemotron free status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-nemotron-free-${{ github.run_id }}
+          path: workspace/dsh-handoff/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: warn
