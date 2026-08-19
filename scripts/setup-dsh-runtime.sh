@@ -18,7 +18,20 @@ if [ ! -x "$ROOT/node_modules/.bin/dsh" ] || [ ! -f "$ROOT/node_modules/@playwri
   rm -rf "$ROOT"
   mkdir -p "$ROOT" "$STORE"
   cat > "$ROOT/package.json" <<'JSON'
-{"private":true,"name":"runner6-dsh-runtime","version":"1.0.0"}
+{
+  "private": true,
+  "name": "runner6-dsh-runtime",
+  "version": "1.0.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@deepseek-ai/dsh-subprocess-local",
+      "@google/genai",
+      "koffi",
+      "node-pty",
+      "protobufjs"
+    ]
+  }
+}
 JSON
   pnpm --dir "$ROOT" --store-dir "$STORE" add --prod \
     "@deepseek-ai/dsh@$DSH_VER" \
