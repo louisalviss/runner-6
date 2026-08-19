@@ -28,8 +28,8 @@ COMMON=(
   --no-playlist
   --restrict-filenames
   --socket-timeout 20
-  --retries 3
-  --fragment-retries 3
+  --retries 2
+  --fragment-retries 2
   --max-filesize 250M
   -P dsh-handoff/downloads
   -o '%(title).100s_[%(id)s].%(ext)s'
@@ -46,8 +46,7 @@ OUT="$(run_ytdlp -f "$FORMAT")"
 CODE=$?
 set -e
 
-# Public YouTube fallback 1: web_embedded is an official yt-dlp player client
-# that may work for embeddable public videos without a PO token.
+# Try public yt-dlp clients first. No account cookies or login are used.
 if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
   set +e
   OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' \
@@ -56,12 +55,21 @@ if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; t
   set -e
 fi
 
-# Public YouTube fallback 2: web_safari may expose HLS formats that do not
-# require a GVS PO token. No account cookies or login are used.
 if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
   set +e
   OUT="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' \
     -f "best[height<=${HEIGHT}]/best")"
+  CODE=$?
+  set -e
+fi
+
+# GitHub-hosted Azure egress is sometimes challenged by YouTube. Reuse the
+# isolated VPNGate rotation pattern already used by runner-7, but only for the
+# media subprocess. The DSH/OpenRouter/GitHub credential steps are already over.
+if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+  echo 'Direct YouTube download blocked; trying isolated relay worker.' >&2
+  set +e
+  OUT="$(YTDLP_BIN="$YTDLP" bash scripts/dsh-ytdlp-vpngate.sh "$URL" "$HEIGHT")"
   CODE=$?
   set -e
 fi
