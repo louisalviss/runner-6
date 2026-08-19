@@ -1,9 +1,7 @@
 {
-  "status": "success_tool_smoke",
-  "run_id": "32246524978",
-  "sha": "09c84b1afd12b058ec79d3591792203e04d582ae",
+  "status": "started",
+  "run_id": "32253007610",
+  "sha": "18a8239e08b046cae2d40c0b97295ac6d859000b",
   "provider": "openrouter-v4",
-  "model": "deepseek/deepseek-v4-pro",
-  "exit_code": 0,
-  "tool_smoke_passed": true
+  "model": "deepseek/deepseek-v4-pro"
 }
