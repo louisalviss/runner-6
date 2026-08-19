@@ -9,10 +9,9 @@ PATCH_FILE="$DSH_HOME/cordis.patch.yml"
 mkdir -p "$PW_ROOT" "$DSH_HOME" "$WORKSPACE/dsh-handoff/browser"
 
 npm install --prefix "$PW_ROOT" --no-audit --no-fund "@playwright/mcp@$PW_VERSION"
-node "$PW_ROOT/node_modules/playwright/cli.js" install-deps chromium
-node "$PW_ROOT/node_modules/playwright/cli.js" install chromium
 
 test -f "$PW_ROOT/node_modules/@playwright/mcp/cli.js"
+command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1
 PLAYWRIGHT_MCP_CLI="$PW_ROOT/node_modules/@playwright/mcp/cli.js"
 echo "PLAYWRIGHT_MCP_CLI=$PLAYWRIGHT_MCP_CLI" >> "$GITHUB_ENV"
 
@@ -28,7 +27,7 @@ cat > "$PATCH_FILE" <<'YAML'
           - !!js process.env.PLAYWRIGHT_MCP_CLI
           - --headless
           - --browser
-          - chromium
+          - chrome
           - --no-sandbox
           - --output-dir
           - !!js process.getBuiltinModule('node:path').join(process.cwd(), 'dsh-handoff', 'browser')
@@ -38,4 +37,4 @@ cat > "$PATCH_FILE" <<'YAML'
         failOnStartupError: true
 YAML
 
-printf 'Playwright MCP %s ready via DSH home patch: %s\n' "$PW_VERSION" "$PATCH_FILE"
+printf 'Playwright MCP %s ready with preinstalled Chrome via %s\n' "$PW_VERSION" "$PATCH_FILE"
