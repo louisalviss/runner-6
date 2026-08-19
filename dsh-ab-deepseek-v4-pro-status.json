@@ -1,0 +1,24 @@
+{
+  "run_id": "32313390989",
+  "model_label": "deepseek-v4-pro",
+  "model_id": "deepseek/deepseek-v4-pro",
+  "dsh_exit_code": "0",
+  "agent_seconds": 174,
+  "download_exit_code": "0",
+  "download_seconds": 171,
+  "selection": {
+    "selected_title": "METAMORPHOSIS",
+    "artist": "INTERWORLD",
+    "selected_url": "https://www.youtube.com/watch?v=lJvRohYSrZM",
+    "reason": "Canonical original track on INTERWORLD's official auto-generated Topic channel (linked to Official Artist Channel). Title is clean 'METAMORPHOSIS' with no version modifiers (not Slowed, Sped Up, Reverb, Extended, or METAMORPHOSIS 2). Distributed by The Orchard Enterprises. 238M views, 2.9M likes, originally released ~4 years ago. This is the definitive original single upload.",
+    "evidence": "YouTube page metadata: title='METAMORPHOSIS', channel='INTERWORLD' with Official Artist Channel badge, description='Provided to YouTube by The Orchard Enterprises METAMORPHOSIS · INTERWORLD · IVAN BELOZEROV', views=238M, age=4 years ago. No slowed/reverb/sped-up/extended/remix qualifiers in title."
+  },
+  "handoff": {
+    "source_url": "https://www.youtube.com/watch?v=lJvRohYSrZM",
+    "relative_path": "dsh-handoff/downloads/METAMORPHOSIS_[lJvRohYSrZM].m4a",
+    "bytes": 2314008,
+    "max_height": 720,
+    "media_type": "audio"
+  },
+  "artifact_present": true
+}
