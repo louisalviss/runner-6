@@ -1,1 +1,1 @@
-{"status":"decrypt_error","run_id":"32300055089","client_id":"unknown","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false}
+{"status":"decrypt_error","run_id":"32300055089","client_id":"unknown","provider":"openrouter-v4","model":"deepseek/deepseek-v4-pro","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false,"artifact_encrypted":false}
