@@ -47,12 +47,12 @@ When the user asks generically for a clip/video to use as source material, editi
 6. Inspect durations visible in the search-result snapshot before choosing. Compare at least the first few plausible results when duration is visible; do not blindly select result #1.
 7. Request **720p** by default. If search metadata visibly indicates HD/1080p/4K, prefer that source over an otherwise equivalent low-quality source. Never claim a resolution that was not actually observed; the worker may fall back below 720p if the selected upload has no 720p representation.
 8. Prefer a clean source over reuploads with large commentary overlays, reaction framing, or unrelated edits when that distinction is visible.
-9. Prefer official/authorized sources when the user asks for them or when an official source is clearly available and otherwise comparable.
+9. Prefer official sources when the user asks for them or when an official source is clearly available and otherwise comparable.
 10. If no candidate satisfies the preferred duration, choose the best semantic match inside the acceptable range and state the observed duration in the response. If only very long candidates exist, mention that rather than silently choosing a 1-hour+ video.
 
 For a normal single-video selection, the decision order is:
 
-`explicit user constraints > semantic match > focused 3–15 min clip > source quality/authority > search ranking`
+`explicit user constraints > semantic match > focused 3–15 min clip > source quality > search ranking`
 
 ## Music/audio selection policy
 
@@ -68,7 +68,7 @@ For a generic music/track request:
 4. For edit/BGM requests, prefer clean audio with minimal speech, intros, watermarks, reaction audio, or unrelated overlays.
 5. Match the requested mood/use-case first: e.g. aggressive phonk, cinematic, sad, tension, anime fight, etc. If the user names a specific version such as instrumental/slowed/reverb, that version takes priority.
 6. Compare several plausible search results when duration/source metadata is visible; do not blindly select result #1.
-7. Prefer the official artist/label/channel for a specific known track when available and appropriate. For a generic track intended for publishing/editing, prefer royalty-free, Creative Commons, public-domain, or creator-permitted sources when comparable.
+7. Prefer the official artist/label/channel for a specific known track when available and otherwise comparable.
 8. Do not open/play a YouTube result merely to obtain the URL when the search snapshot already exposes the title, duration and `/watch?v=...` link needed to decide.
 9. Queue audio with:
 
@@ -78,7 +78,7 @@ For a generic music/track request:
 
 For a normal single-track selection, the decision order is:
 
-`explicit user constraints > exact musical/use-case match > clean 1.5–6 min track > source quality/authority/licensing > search ranking`
+`explicit user constraints > exact musical/use-case match > clean 1.5–6 min track > source quality > search ranking`
 
 ## Security
 
