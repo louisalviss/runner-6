@@ -85,8 +85,13 @@ if [ -z "$FINAL" ] || [ ! -f "$FINAL" ] || [ ! -s "$FINAL" ]; then
   exit 4
 fi
 
-REL="${FINAL#./}"
-BYTES="$(stat -c '%s' "$FINAL")"
+ABS="$(realpath "$FINAL")"
+ROOT="$(realpath "$PWD")"
+case "$ABS" in
+  "$ROOT"/*) REL="${ABS#"$ROOT"/}" ;;
+  *) echo 'downloaded file escaped the workspace' >&2; exit 5 ;;
+esac
+BYTES="$(stat -c '%s' "$ABS")"
 
 python - "$URL" "$REL" "$BYTES" "$HEIGHT" <<'PY'
 import json, sys
