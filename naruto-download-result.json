@@ -1,15 +1,16 @@
 {
-  "status": "no_creative_commons_candidate",
-  "run_id": "32247582630",
-  "sha": "3fded213fa7605a33e95198dbddaf2c86ddc0a10",
+  "status": "download_failed",
+  "run_id": "32247725590",
+  "sha": "0d5af5a7e08a12131217579fda11ab3082375511",
   "title": null,
   "video_id": null,
   "source_url": null,
   "license": null,
+  "license_verified_by": null,
   "uploader": null,
   "duration": null,
-  "checked_candidates": 25,
+  "checked_candidates": null,
   "file": null,
   "bytes": null,
-  "artifact_name": "naruto-cc-32247582630"
+  "artifact_name": "naruto-cc-32247725590"
 }
