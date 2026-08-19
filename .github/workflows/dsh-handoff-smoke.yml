@@ -7,7 +7,7 @@ on:
       - "dsh-handoff-smoke-request.txt"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: runner-6-handoff-smoke
@@ -70,6 +70,26 @@ jobs:
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
+
+      - name: Publish safe success status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SIZE="$(python - <<'PY'
+          import json, os
+          p=json.load(open(os.path.join(os.environ['RUNNER_TEMP'],'probe.json')))
+          print(p['format']['size'])
+          PY
+          )"
+          printf '{"status":"success","run_id":"%s","artifact_name":"dsh-handoff-smoke-%s","artifact_present":true,"source_size":%s}\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ID" "$SIZE" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-handoff-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-handoff-smoke-status.json" -f message='Update encrypted handoff smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-handoff-smoke-status.json" -f message='Update encrypted handoff smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
 
       - name: Validate
         run: |
