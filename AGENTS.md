@@ -2,6 +2,14 @@
 
 These rules define execution/output handling only. Preserve the user's requested task and intent.
 
+## Decision scope
+
+- This worker contract is for task execution and source selection; it does not perform legal or licensing analysis.
+- Unless the user explicitly asks for a rights/licensing assessment, do not speculate about ownership, licensing status, or permitted-use theories while selecting media.
+- Select sources from the user's explicit constraints, semantic match, quality, duration, cleanliness, and actual technical availability.
+- When retrieval fails, report the concrete execution result returned by the browser/downloader/worker rather than substituting an inferred policy explanation.
+- Keep the security rules in this file unchanged and use only the network/download paths implemented by this repository.
+
 ## Deliverable handoff
 
 - User deliverables belong under `dsh-handoff/` in the current workspace. Browser diagnostic snapshots/logs do not.
