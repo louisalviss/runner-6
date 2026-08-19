@@ -1,0 +1,66 @@
+name: Plain Media Artifact Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plain-media-smoke-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-plain-media-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Generate MP4
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/media"
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "color=c=black:s=320x240:r=25:d=1" \
+            -f lavfi -i "sine=frequency=880:sample_rate=44100:duration=1" \
+            -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac \
+            "$RUNNER_TEMP/media/DSH_HANDOFF_SMOKE.mp4"
+          test -s "$RUNNER_TEMP/media/DSH_HANDOFF_SMOKE.mp4"
+          ffprobe -v error -show_entries format=duration,size -of json \
+            "$RUNNER_TEMP/media/DSH_HANDOFF_SMOKE.mp4" > "$RUNNER_TEMP/probe.json"
+
+      - name: Upload plain MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: plain-media-${{ github.run_id }}
+          path: ${{ runner.temp }}/media/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SIZE="$(python - <<'PY'
+          import json, os
+          p=json.load(open(os.path.join(os.environ['RUNNER_TEMP'],'probe.json')))
+          print(p['format']['size'])
+          PY
+          )"
+          printf '{"status":"success","run_id":"%s","artifact_name":"plain-media-%s","artifact_present":true,"artifact_encrypted":false,"source_size":%s}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ID" "$SIZE" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/plain-media-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/plain-media-smoke-status.json" -f message='Update plain media smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/plain-media-smoke-status.json" -f message='Update plain media smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
