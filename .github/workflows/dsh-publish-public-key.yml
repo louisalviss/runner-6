@@ -1,0 +1,50 @@
+name: DSH Publish Public Key
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-public-key-refresh.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Derive public JWK from private secret
+        env:
+          DSH_CHAT_PRIVATE_KEY_B64: ${{ secrets.DSH_CHAT_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DSH_CHAT_PRIVATE_KEY_B64:-}" ]; then
+            echo 'DSH_CHAT_PRIVATE_KEY_B64 is not configured.' >&2
+            exit 1
+          fi
+          node <<'NODE'
+          const fs=require('fs');
+          const crypto=require('crypto');
+          const priv=crypto.createPrivateKey({key:Buffer.from(process.env.DSH_CHAT_PRIVATE_KEY_B64,'base64'),format:'der',type:'pkcs8'});
+          const pub=crypto.createPublicKey(priv).export({format:'jwk'});
+          if(pub.kty!=='RSA'||!pub.n||!pub.e) throw new Error('unexpected public key');
+          const safe={kty:pub.kty,n:pub.n,e:pub.e,alg:'RSA-OAEP-256',ext:true,key_ops:['encrypt']};
+          fs.writeFileSync('/tmp/dsh-public-key.json',JSON.stringify(safe));
+          NODE
+
+      - name: Publish safe public key
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CONTENT="$(base64 -w0 /tmp/dsh-public-key.json)"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-public-key.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-public-key.json" -f message='Refresh DSH public encryption key [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-public-key.json" -f message='Publish DSH public encryption key [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
