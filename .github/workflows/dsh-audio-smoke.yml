@@ -1,0 +1,69 @@
+name: DSH Audio Handoff Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-audio-smoke-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Queue audio
+        run: bash scripts/dsh-request-audio.sh 'https://www.youtube.com/watch?v=_cMxraX_5RE' 'Blender open movie audio smoke'
+      - name: Execute queued audio
+        id: audio
+        run: |
+          set -euo pipefail
+          URL="$(python - <<'PY'
+          import json
+          print(json.load(open('.dsh-download-request.json'))['url'])
+          PY
+          )"
+          bash scripts/dsh-download-media.sh "$URL" 720
+      - name: Validate audio handoff
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          h=json.loads(Path('dsh-handoff/handoff.json').read_text())
+          assert h.get('media_type') == 'audio', h
+          p=Path(h['relative_path'])
+          assert p.exists() and p.stat().st_size > 0, h
+          assert p.suffix.lower() not in {'.mp4','.mkv','.mov'}, p
+          print(json.dumps(h,ensure_ascii=False))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-audio-smoke-${{ github.run_id }}
+          path: dsh-handoff/
+          retention-days: 1
+          compression-level: 0
+      - name: Publish smoke status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -s dsh-handoff/handoff.json ]; then
+            python - <<'PY' > /tmp/status.json
+          import json,os
+          from pathlib import Path
+          h=json.loads(Path('dsh-handoff/handoff.json').read_text())
+          print(json.dumps({'status':'success','run_id':os.environ['GITHUB_RUN_ID'],'handoff':h},separators=(',',':')))
+          PY
+          else
+            printf '{"status":"failed","run_id":"%s"}\n' "$GITHUB_RUN_ID" > /tmp/status.json
+          fi
+          C="$(base64 -w0 /tmp/status.json)"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-audio-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-audio-smoke-status.json" -f message='Update DSH audio smoke status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-audio-smoke-status.json" -f message='Update DSH audio smoke status [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
