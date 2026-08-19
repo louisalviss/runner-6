@@ -104,6 +104,31 @@ jobs:
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
 
+      - name: Publish run marker
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('dsh-status.json').write_text(json.dumps({
+              'status': 'started',
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'sha': os.environ.get('GITHUB_SHA'),
+              'provider': os.environ.get('DSH_PROVIDER'),
+              'model': os.environ.get('DSH_MODEL'),
+              'dsh_version': os.environ.get('DSH_VERSION'),
+          }, indent=2) + '\n')
+          PY
+          cp dsh-status.json "$RUNNER_TEMP/dsh-status-started.json"
+          git fetch origin main
+          git reset --hard origin/main
+          cp "$RUNNER_TEMP/dsh-status-started.json" dsh-status.json
+          git config user.name "runner-6-dsh-bot"
+          git config user.email "runner-6-dsh-bot@users.noreply.github.com"
+          git add dsh-status.json
+          git commit -m "DSH run started [skip ci]" || exit 0
+          git push origin HEAD:main
+
       - name: Run DSH headless through OpenRouter
         id: run_dsh
         env:
@@ -182,6 +207,15 @@ jobs:
               'sha': os.environ.get('GITHUB_SHA'),
           }
           Path('dsh-result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+          Path('dsh-status.json').write_text(json.dumps({
+              'status': status,
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'sha': os.environ.get('GITHUB_SHA'),
+              'provider': os.environ.get('DSH_PROVIDER'),
+              'model': os.environ.get('DSH_MODEL'),
+              'exit_code': code,
+              'tool_smoke_passed': tool_smoke_passed,
+          }, indent=2) + '\n')
           PY
 
       - name: Upload DSH result artifact
@@ -189,20 +223,24 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dsh-result-${{ github.run_id }}
-          path: dsh-result.json
+          path: |
+            dsh-result.json
+            dsh-status.json
           retention-days: 7
 
-      - name: Persist compact result
+      - name: Persist result and status
         if: always()
         run: |
           set -euo pipefail
-          cp dsh-result.json "$RUNNER_TEMP/dsh-result.json"
+          cp dsh-result.json "$RUNNER_TEMP/dsh-result-final.json"
+          cp dsh-status.json "$RUNNER_TEMP/dsh-status-final.json"
           git fetch origin main
           git reset --hard origin/main
-          cp "$RUNNER_TEMP/dsh-result.json" dsh-result.json
+          cp "$RUNNER_TEMP/dsh-result-final.json" dsh-result.json
+          cp "$RUNNER_TEMP/dsh-status-final.json" dsh-status.json
           git config user.name "runner-6-dsh-bot"
           git config user.email "runner-6-dsh-bot@users.noreply.github.com"
-          git add dsh-result.json
+          git add dsh-result.json dsh-status.json
           git commit -m "Update DSH OpenRouter result [skip ci]" || exit 0
           git push origin HEAD:main
 
