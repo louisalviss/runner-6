@@ -1,6 +1,12 @@
 name: OpenRouter Balance Check
 
 on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: "Encrypted balance request envelope"
+        required: true
+        type: string
   push:
     branches: [main]
     paths:
@@ -16,10 +22,23 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Resolve encrypted request
+        env:
+          BALANCE_PAYLOAD: ${{ inputs.payload }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BALANCE_PAYLOAD:-}" ]; then
+            printf '%s' "$BALANCE_PAYLOAD" > "$RUNNER_TEMP/request.enc"
+          else
+            cp openrouter-balance-request.txt "$RUNNER_TEMP/request.enc"
+          fi
+          chmod 600 "$RUNNER_TEMP/request.enc"
 
       - name: Decrypt one-time request
         id: dec
@@ -27,13 +46,27 @@ jobs:
           DSH_CHAT_PRIVATE_KEY_B64: ${{ secrets.DSH_CHAT_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
-          cp openrouter-balance-request.txt "$RUNNER_TEMP/request.enc"
           node scripts/dsh-handoff-crypto.mjs decrypt-envelope \
             "$RUNNER_TEMP/request.enc" \
             "$RUNNER_TEMP/request.txt" \
             "$RUNNER_TEMP/session-key.b64" \
             "$RUNNER_TEMP/client-id.txt"
           test "$(cat "$RUNNER_TEMP/request.txt")" = "openrouter-balance-check-v1"
+
+      - name: Publish safe started status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CID="$(cat "$RUNNER_TEMP/client-id.txt")"
+          printf '{"status":"started","run_id":"%s","client_id":"%s"}\n' "$GITHUB_RUN_ID" "$CID" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/openrouter-balance-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/openrouter-balance-status.json" -f message='OpenRouter balance check started [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/openrouter-balance-status.json" -f message='OpenRouter balance check started [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
 
       - name: Query OpenRouter account and key metadata
         env:
