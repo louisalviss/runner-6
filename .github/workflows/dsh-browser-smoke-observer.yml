@@ -1,0 +1,39 @@
+name: DSH Browser Smoke Observer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-browser-observer-trigger.txt"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read latest browser smoke run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            DATA="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/dsh-browser-smoke.yml/runs?per_page=5")"
+            ID="$(printf '%s' "$DATA" | jq -r '.workflow_runs[0].id // empty')"
+            if [ -n "$ID" ]; then
+              printf '%s' "$DATA" | jq -c '.workflow_runs[0] | {run_id:.id,status,conclusion,event,head_sha,created_at,updated_at}' > "$RUNNER_TEMP/observer.json"
+              break
+            fi
+            sleep 5
+          done
+          test -s "$RUNNER_TEMP/observer.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/observer.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-browser-smoke-observer.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-browser-smoke-observer.json" -f message='Update browser smoke observer [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-browser-smoke-observer.json" -f message='Update browser smoke observer [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
