@@ -21,15 +21,19 @@ When the user asks to find, source, inspect, or download media from the web:
 6. Never attempt to extract browser cookies, log in, inspect account storage, or work around YouTube player Error 153 for an ordinary public-video sourcing task.
 7. Once the URL is selected, do **not** run yt-dlp inside the DSH turn. Queue the worker download and finish promptly:
 
+   Video:
    `bash scripts/dsh-request-download.sh 'VIDEO_URL' 720 'short descriptive label'`
 
-   Use `360` instead of `720` only when the user requests a small preview or bandwidth-saving result.
-8. A straightforward single-video request should normally use one browser search and one `dsh-request-download.sh` call. After the request script succeeds, respond with the selected source URL and say that the Runner handoff download was queued.
-9. The Runner executes `scripts/dsh-download-media.sh` after DSH exits. Successful media is saved under `dsh-handoff/downloads/`; `dsh-handoff/handoff.json` records source URL, relative path and byte size; Actions uploads `dsh-handoff/` as a short-lived plaintext artifact that ChatGPT/GPT can retrieve.
+   Audio/music:
+   `bash scripts/dsh-request-audio.sh 'SOURCE_URL' 'short descriptive label'`
+
+   Use video `360` instead of `720` only when the user requests a small preview or bandwidth-saving result.
+8. A straightforward single-file request should normally use one browser search and one request-helper call. After the request helper succeeds, respond with the selected source URL and say that the Runner handoff download was queued.
+9. The Runner executes `scripts/dsh-download-media.sh` after DSH exits. Successful media is saved under `dsh-handoff/downloads/`; `dsh-handoff/handoff.json` records source URL, relative path, byte size and media type; Actions uploads `dsh-handoff/` as a short-lived plaintext artifact that ChatGPT/GPT can retrieve.
 10. If the source blocks the worker download, the workflow must report that failure instead of DSH starting a browser/cookie bypass loop.
 11. Never commit downloaded media into git.
 
-## Default media-selection policy
+## Default video-selection policy
 
 Explicit user constraints always win. If the user specifies a duration, source/channel, exact video, resolution, format, or other selection criterion, follow it instead of these defaults.
 
@@ -49,6 +53,32 @@ When the user asks generically for a clip/video to use as source material, editi
 For a normal single-video selection, the decision order is:
 
 `explicit user constraints > semantic match > focused 3–15 min clip > source quality/authority > search ranking`
+
+## Music/audio selection policy
+
+Use audio mode when the user asks for music, a song, track, BGM, soundtrack, instrumental, beat, phonk, audio, sound effect, or another primarily-audio deliverable.
+
+Explicit user constraints always win. If the user names an exact song/version, artist, duration, instrumental/vocal/slowed/remix variant, source, or format, follow that request instead of these defaults.
+
+For a generic music/track request:
+
+1. Prefer a **single clean track**, not a 30–120 minute mix, playlist, compilation, reaction, lyric-explanation video, or livestream.
+2. Target **1.5–6 minutes** by default; **1–10 minutes** is acceptable for a better semantic match.
+3. Avoid results over **20 minutes** unless the user explicitly asks for a mix/playlist/extended version.
+4. For edit/BGM requests, prefer clean audio with minimal speech, intros, watermarks, reaction audio, or unrelated overlays.
+5. Match the requested mood/use-case first: e.g. aggressive phonk, cinematic, sad, tension, anime fight, etc. If the user names a specific version such as instrumental/slowed/reverb, that version takes priority.
+6. Compare several plausible search results when duration/source metadata is visible; do not blindly select result #1.
+7. Prefer the official artist/label/channel for a specific known track when available and appropriate. For a generic track intended for publishing/editing, prefer royalty-free, Creative Commons, public-domain, or creator-permitted sources when comparable.
+8. Do not open/play a YouTube result merely to obtain the URL when the search snapshot already exposes the title, duration and `/watch?v=...` link needed to decide.
+9. Queue audio with:
+
+   `bash scripts/dsh-request-audio.sh 'SOURCE_URL' 'artist - title or descriptive label'`
+
+10. The worker downloads **audio-only**, preferring M4A when available and otherwise the best available audio stream. It writes `media_type: audio` in `dsh-handoff/handoff.json`. Do not claim MP3/WAV unless the worker actually produced that format.
+
+For a normal single-track selection, the decision order is:
+
+`explicit user constraints > exact musical/use-case match > clean 1.5–6 min track > source quality/authority/licensing > search ranking`
 
 ## Security
 
