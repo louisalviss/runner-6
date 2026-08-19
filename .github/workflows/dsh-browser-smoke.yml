@@ -1,0 +1,191 @@
+name: DSH Playwright Browser Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-browser-smoke-request.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-browser-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      DSH_PROVIDER: openrouter-v4
+      DSH_MODEL: deepseek/deepseek-v4-pro
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Set runtime
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Decrypt smoke task
+        env:
+          DSH_CHAT_PRIVATE_KEY_B64: ${{ secrets.DSH_CHAT_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          node workspace/scripts/dsh-handoff-crypto.mjs decrypt-envelope \
+            workspace/dsh-browser-smoke-request.txt \
+            "$RUNNER_TEMP/task.txt" \
+            "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/client-id.txt"
+
+      - name: Configure OpenRouter
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 16384
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Cache DSH and Chromium downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.npm
+          key: runner6-dsh-${{ runner.os }}-rc7-pwmcp-0.0.78
+
+      - name: Configure Playwright MCP browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Run DSH browser smoke
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          TASK="$(cat "$RUNNER_TEMP/task.txt")"
+          set +e
+          timeout --signal=TERM --kill-after=10s 600s \
+            npx --yes "@deepseek-ai/dsh@$DSH_VERSION" --profile headless "$TASK" \
+            > "$RUNNER_TEMP/output.txt" 2> "$RUNNER_TEMP/error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          unset TASK OPENROUTER_API_KEY
+
+      - name: Inspect browser outputs
+        id: media
+        run: |
+          set -euo pipefail
+          COUNT="$(find workspace/dsh-handoff -type f -size +0c 2>/dev/null | wc -l | tr -d ' ')"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -gt 0 ]; then echo 'present=true' >> "$GITHUB_OUTPUT"; else echo 'present=false' >> "$GITHUB_OUTPUT"; fi
+
+      - name: Upload plain browser artifact
+        if: steps.media.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-browser-smoke-${{ github.run_id }}
+          path: workspace/dsh-handoff/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Build encrypted smoke result
+        env:
+          EXIT_CODE: ${{ steps.dsh.outputs.exit_code }}
+          MEDIA_PRESENT: ${{ steps.media.outputs.present }}
+          MEDIA_COUNT: ${{ steps.media.outputs.count }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          t=Path(os.environ['RUNNER_TEMP'])
+          out=(t/'output.txt').read_text(errors='replace') if (t/'output.txt').exists() else ''
+          err=(t/'error.txt').read_text(errors='replace') if (t/'error.txt').exists() else ''
+          code=int(os.environ.get('EXIT_CODE') or 1)
+          result={
+            'status':'success' if code==0 else ('timeout' if code in (124,137) else 'error'),
+            'output':out[:100000],
+            'stderr':err[:50000],
+            'exit_code':code,
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'client_id':(t/'client-id.txt').read_text().strip(),
+            'browser':'playwright-mcp',
+            'artifact_present':os.environ.get('MEDIA_PRESENT')=='true',
+            'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),
+            'artifact_name':f"dsh-browser-smoke-{os.environ['GITHUB_RUN_ID']}" if os.environ.get('MEDIA_PRESENT')=='true' else None,
+            'artifact_encrypted':False,
+          }
+          (t/'result.json').write_text(json.dumps(result,ensure_ascii=False,separators=(',',':')))
+          PY
+          CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt")"
+          node workspace/scripts/dsh-handoff-crypto.mjs encrypt-json \
+            "$RUNNER_TEMP/result.json" "$RUNNER_TEMP/session-key.b64" \
+            "$RUNNER_TEMP/result.enc.json" "$CLIENT_ID" "$GITHUB_RUN_ID"
+
+      - name: Publish safe status and encrypted result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXIT_CODE: ${{ steps.dsh.outputs.exit_code }}
+          MEDIA_PRESENT: ${{ steps.media.outputs.present }}
+          MEDIA_COUNT: ${{ steps.media.outputs.count }}
+        run: |
+          set -euo pipefail
+          CODE="${EXIT_CODE:-1}"
+          STATUS=error
+          [ "$CODE" = 0 ] && STATUS=success
+          { [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; } && STATUS=timeout
+          ART=false; [ "${MEDIA_PRESENT:-false}" = true ] && ART=true
+          CLIENT_ID="$(cat "$RUNNER_TEMP/client-id.txt" 2>/dev/null || printf unknown)"
+          printf '{"status":"%s","run_id":"%s","client_id":"%s","browser":"playwright-mcp","artifact_present":%s,"artifact_count":%s,"artifact_encrypted":false}\n' \
+            "$STATUS" "$GITHUB_RUN_ID" "$CLIENT_ID" "$ART" "${MEDIA_COUNT:-0}" > "$RUNNER_TEMP/status.json"
+          put_file() {
+            local path="$1" file="$2" msg="$3" content sha
+            content="$(base64 -w0 "$file")"
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=main" --jq .sha 2>/dev/null || true)"
+            if [ -n "$sha" ]; then
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f sha="$sha" -f branch=main >/dev/null
+            else
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" -f message="$msg" -f content="$content" -f branch=main >/dev/null
+            fi
+          }
+          [ -f "$RUNNER_TEMP/result.enc.json" ] && put_file dsh-browser-smoke-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted browser smoke result [skip ci]'
+          put_file dsh-browser-smoke-status.json "$RUNNER_TEMP/status.json" 'Update browser smoke status [skip ci]'
+
+      - name: Validate
+        run: |
+          CODE="${{ steps.dsh.outputs.exit_code }}"
+          [ "$CODE" = 0 ] || { echo "DSH browser smoke failed: exit $CODE"; exit 1; }
+          [ "${{ steps.media.outputs.present }}" = true ] || { echo 'DSH browser smoke created no browser artifact'; exit 1; }
+          echo success
