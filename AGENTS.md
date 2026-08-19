@@ -18,20 +18,22 @@ When the user asks to find, source, inspect, or download media from the web:
 1. Understand the user's semantic request first; do not require them to provide a URL when they asked you to find one.
 2. Use the Playwright MCP browser to search/navigate the requested site and inspect real results. For YouTube requests, browse/search YouTube (or a search-engine result pointing to YouTube if YouTube search is blocked) and resolve a concrete `youtube.com/watch` or `youtu.be` URL. Do not invent a URL.
 3. Prefer a result that actually matches the requested subject. If the user names an official source/channel, prefer it when available.
-4. For supported public media that the user is authorized to download, use the repository wrapper instead of improvising a long shell command:
+4. **YouTube fast path:** once a search-result snapshot exposes a matching `/watch?v=...` link, that is enough. Canonicalize it to `https://www.youtube.com/watch?v=VIDEO_ID` and proceed directly to the downloader. Do **not** open/play the video merely to validate it unless the search result is genuinely ambiguous.
+5. Never attempt to extract browser cookies, log in, inspect account storage, or work around YouTube player Error 153 for an ordinary public-video sourcing task. Public player failure is not a reason to spend the rest of the agent turn on cookies.
+6. For supported public media that the user is authorized to download, use the repository wrapper immediately after resolving the URL:
 
    `bash scripts/dsh-download-media.sh 'VIDEO_URL'`
 
    The wrapper installs/uses the official `yt-dlp` binary, enables the available Node 24 JavaScript runtime for YouTube challenge solving, applies bounded retries/timeouts, retries one compatible public YouTube client when appropriate, and saves the final file under `dsh-handoff/downloads/`.
-5. Do not try to save a YouTube video through browser UI when the downloader wrapper supports the resolved URL.
-6. After download, verify the wrapper printed a `Saved:` path and that the file is non-empty. `dsh-handoff/handoff.json` is written automatically with the source URL, relative path, and byte size.
-7. In the final response, report both the source URL and the relative handoff path, for example:
+7. Use at most one normal browser search plus one downloader invocation for a straightforward single-video request. If the downloader fails, report the exact failure instead of starting an unbounded browser/cookie investigation.
+8. After download, verify the wrapper printed a `Saved:` path and that the file is non-empty. `dsh-handoff/handoff.json` is written automatically with the source URL, relative path, and byte size.
+9. In the final response, report both the source URL and the relative handoff path, for example:
 
    `Source: https://www.youtube.com/watch?v=...`
    `Saved: dsh-handoff/downloads/example.mp4`
 
-8. Never commit downloaded media into git. The workflow will upload `dsh-handoff/` as a short-lived Actions artifact for ChatGPT/GPT to retrieve later.
-9. If download is not authorized or is blocked by the source, return the source URL and the failure reason instead of bypassing access controls.
+10. Never commit downloaded media into git. The workflow will upload `dsh-handoff/` as a short-lived Actions artifact for ChatGPT/GPT to retrieve later.
+11. If download is not authorized or is blocked by the source, return the source URL and the failure reason instead of bypassing access controls.
 
 ## Security
 
