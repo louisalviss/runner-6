@@ -1,0 +1,63 @@
+{
+  "run_id": "32313620198",
+  "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "dsh_exit_code": "0",
+  "agent_seconds": 222,
+  "download_exit_code": "0",
+  "download_seconds": 47,
+  "selection": {
+    "selected_title": "METAMORPHOSIS",
+    "artist": "INTERWORLD",
+    "selected_url": "https://www.youtube.com/watch?v=317RHaFF7Xk",
+    "reason": "Canonical original track selection. No official artist/label/Topic source exists for the original version (official channel only has Slowed+Reverb, Sped Up, METAMORPHOSIS 2 via The Orchard Enterprises). Selected the highest-view (113M) upload with correct original duration (2:23), proper stylized title \"INTERWORLD \\\"METAMORPHOSIS\\\"\", on PHONK DOMAIN — the major phonk promotion channel that originally popularized the track. Verified not Slowed, Sped Up, remix, edit, METAMORPHOSIS 2, compilation, reaction, or repost-with-overlay.",
+    "evidence": {
+      "search_results": [
+        {
+          "video_id": "317RHaFF7Xk",
+          "title": "INTERWORLD \"METAMORPHOSIS\"",
+          "duration": "2:23",
+          "views": "113M",
+          "channel": "PHONK DOMAIN"
+        },
+        {
+          "video_id": "NS9z2QHcZdY",
+          "title": "INTERWORLD - METAMORPHOSIS",
+          "duration": "2:23",
+          "views": "94M",
+          "channel": "Chill Nation"
+        },
+        {
+          "video_id": "-dhx7Hnu-wo",
+          "title": "INTERWORLD - METAMORPHOSIS",
+          "duration": "2:24",
+          "views": "29M",
+          "channel": "The Vibe Guide"
+        }
+      ],
+      "official_channel_check": {
+        "channel_id": "UCH8FcwNd0ttrTCsdKep4Fyg",
+        "has_original": false,
+        "has_slowed_reverb": true,
+        "has_sped_up": true,
+        "has_metamorphosis_2": true,
+        "distributor": "The Orchard Enterprises"
+      },
+      "excluded_versions": [
+        "Slowed + Reverb (2:53, 73M views)",
+        "Sped Up (1:51, 32M views)",
+        "METAMORPHOSIS 2 (2:18, 25M views)",
+        "Extended Mix (9:30)",
+        "Instrumental (3:38)",
+        "1-hour loops"
+      ]
+    }
+  },
+  "handoff": {
+    "source_url": "https://www.youtube.com/watch?v=317RHaFF7Xk",
+    "relative_path": "dsh-handoff/downloads/INTERWORLD_METAMORPHOSIS_[317RHaFF7Xk].m4a",
+    "bytes": 2313816,
+    "max_height": 720,
+    "media_type": "audio"
+  },
+  "artifact_present": true
+}
