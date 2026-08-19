@@ -1,1 +1,1 @@
-{"status":"error","run_id":"32288906512","artifact_name":"plain-media-32288906512","artifact_present":false,"artifact_encrypted":false,"source_size":0,"generate":"failure","upload":"skipped"}
+{"status":"success","run_id":"32289025379","artifact_name":"plain-media-32289025379","artifact_present":true,"artifact_encrypted":false,"source_size":12188,"generate":"success","upload":"success"}
