@@ -62,19 +62,17 @@ for idx,(start,end,speed,role,target_d) in enumerate(segments):
         punch=1.08 if role.startswith('stutter_') else 1.02
         bright=0.035 if role.startswith('stutter_') and idx%2==0 else 0.0
         filters.append(f'[{base}b]scale=-2:1920:flags=lanczos,crop=1080:1920:x=(iw-1080)/2:y=0,scale={int(1080*punch)}:{int(1920*punch)},crop=1080:1920,eq=contrast=1.08:saturation=1.12:brightness={bright},vignette=PI/5[hero{idx}]')
-        # Mini full-frame strip remains visible at bottom so context is never lost.
         filters.append(f'[{base}c]scale=760:-2:flags=lanczos,eq=contrast=1.04:saturation=1.05[mini{idx}]')
         filters.append(f'[{bg}][hero{idx}]overlay=0:0:shortest=1[tmp{idx}];[tmp{idx}][mini{idx}]overlay=x=(W-w)/2:y=1440:shortest=1,setsar=1,fps=30[{out}]')
     else:
-        # SAFE FIGHT FRAME: preserve almost all 16:9 width. Only ~6.5% per side can be trimmed.
-        filters.append(f'[{base}b]scale=1240:-2:flags=lanczos,crop=1080:698:x=(iw-1080)/2:y=(ih-698)/2,eq=contrast=1.06:saturation=1.08[safe{idx}]')
-        # A smaller exact full-frame reference sits below the main frame as a failsafe for very wide choreography.
+        # Source is ~2.21:1, so use 620px height; this trims only ~10.5% per side.
+        filters.append(f'[{base}b]scale=-2:620:flags=lanczos,crop=1080:620:x=(iw-1080)/2:y=0,eq=contrast=1.06:saturation=1.08[safe{idx}]')
+        # Exact full-width reference remains visible below for very wide choreography.
         filters.append(f'[{base}c]scale=760:-2:flags=lanczos,eq=brightness=-0.02:saturation=1.03[mini{idx}]')
-        filters.append(f'[{bg}][safe{idx}]overlay=x=0:y=465:shortest=1[tmp{idx}];[tmp{idx}][mini{idx}]overlay=x=(W-w)/2:y=1265:shortest=1,setsar=1,fps=30[{out}]')
+        filters.append(f'[{bg}][safe{idx}]overlay=x=0:y=500:shortest=1[tmp{idx}];[tmp{idx}][mini{idx}]overlay=x=(W-w)/2:y=1280:shortest=1,setsar=1,fps=30[{out}]')
     vlabels.append(f'[{out}]')
     if source_has_audio:
         al=f'a{idx}'; corr=1/pts_scale
-        # Current editorial targets stay close enough that one atempo stage is valid.
         if not (0.5 <= corr <= 2.0): corr=1.0
         filters.append(f'[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,atempo={speed},atempo={corr}[{al}]')
         alabels.append(f'[{al}]')
@@ -91,6 +89,6 @@ else: filters.append('[music]alimiter=limit=0.96[aout]')
 cmd=['ffmpeg','-nostdin','-hide_banner','-y','-i',str(video),'-i',str(music),'-filter_complex',';'.join(filters),'-map','[vout]','-map','[aout]','-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-movflags','+faststart','-t',f'{out_duration:.3f}',str(output)]
 rr=subprocess.run(cmd)
 if rr.returncode!=0 or not output.exists() or output.stat().st_size<1000000: raise SystemExit(f'ffmpeg render failed: {rr.returncode}')
-meta={'status':'success','concept':'iphone_safe_fast_fight_stutter_aura_payoff','duration_sec':round(out_duration,3),'aura_reveal_sec':round(aura_reveal,3),'detected_music_drop_sec':round(drop_sec,3),'audio_start_sec':round(audio_start,3),'drop_alignment_error_sec':round(abs((drop_sec-audio_start)-aura_reveal),3),'fight_layout':'1080x698 near-full-width + 760px exact-full-frame reference','aura_layout':'portrait hero + 760px exact-full-frame reference','segments':[{'start':a,'end':b,'speed':s,'role':r,'edit_duration':d} for a,b,s,r,d in segments],'format':'1080x1920 H.264 + AAC','bytes':output.stat().st_size}
+meta={'status':'success','concept':'iphone_safe_fast_fight_stutter_aura_payoff','duration_sec':round(out_duration,3),'aura_reveal_sec':round(aura_reveal,3),'detected_music_drop_sec':round(drop_sec,3),'audio_start_sec':round(audio_start,3),'drop_alignment_error_sec':round(abs((drop_sec-audio_start)-aura_reveal),3),'fight_layout':'1080x620 near-full-width + 760px exact-full-frame reference','aura_layout':'portrait hero + 760px exact-full-frame reference','segments':[{'start':a,'end':b,'speed':s,'role':r,'edit_duration':d} for a,b,s,r,d in segments],'format':'1080x1920 H.264 + AAC','bytes':output.stat().st_size}
 Path(analysis_path).write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(meta,ensure_ascii=False))
