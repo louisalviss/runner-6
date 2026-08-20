@@ -1,0 +1,176 @@
+name: DSH Mahoraga TikTok fast direct
+
+on:
+  push:
+    branches: [dsh-tiktok-mahoraga-direct]
+    paths: ['dsh-mahoraga-tiktok-fast-trigger.txt']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Running status
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","phase":"setup","run_id":"%s","source":"tiktok-direct"}\n' "$GITHUB_RUN_ID" > dsh-mahoraga-tiktok-fast-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-fast-status.json
+          git commit -m 'TikTok fast direct running [skip ci]' || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
+
+      - name: Install downloader
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pip curl
+          python3 -m pip install --user -U --pre 'yt-dlp[default,curl-cffi]'
+          "$HOME/.local/bin/yt-dlp" --version
+
+      - name: Resolve exact post ID without mirror
+        id: resolve
+        run: |
+          set -euo pipefail
+          mkdir -p fast-out dsh-handoff/downloads
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/139.0.0.0 Safari/537.36'
+          curl -LfsS --connect-timeout 10 --max-time 35 -A "$UA" 'https://urlebird.com/user/divine_daniel21/' -o fast-out/index.html
+          python3 - <<'PY'
+          from pathlib import Path
+          import html,re
+          s=Path('fast-out/index.html').read_text(errors='replace')
+          low=html.unescape(s).lower()
+          needles=['mahoraga x the largest','big raga really','bigxthaplug']
+          pos=-1
+          for n in needles:
+              pos=low.find(n)
+              if pos>=0: break
+          if pos<0:
+              raise SystemExit('target title not found in creator index')
+          window=s[max(0,pos-12000):min(len(s),pos+12000)]
+          # Prefer explicit TikTok URLs; otherwise use the numeric ID embedded in the indexed video link.
+          m=re.search(r'https?://(?:www\.)?tiktok\.com/@divine_daniel21/video/(\d{17,21})',window,re.I)
+          if not m:
+              links=re.findall(r'href=["\']([^"\']*?/video/[^"\']+)["\']',window,re.I)
+              for link in links:
+                  ids=re.findall(r'(?<!\d)(\d{17,21})(?!\d)',link)
+                  if ids:
+                      m=type('M',(),{'group':lambda self,i: ids[-1]})()
+                      break
+          if not m:
+              ids=re.findall(r'(?<!\d)(\d{17,21})(?!\d)',window)
+              if not ids: raise SystemExit('no TikTok numeric post id near target title')
+              vid=ids[-1]
+          else:
+              vid=m.group(1)
+          url=f'https://www.tiktok.com/@divine_daniel21/video/{vid}'
+          Path('fast-out/target_url.txt').write_text(url+'\n')
+          Path('fast-out/target_id.txt').write_text(vid+'\n')
+          print(url)
+          PY
+          TARGET="$(cat fast-out/target_url.txt)"
+          echo "target_url=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Resolved direct TikTok URL: $TARGET"
+
+      - name: Download from TikTok
+        env:
+          TARGET_URL: ${{ steps.resolve.outputs.target_url }}
+        run: |
+          set -euo pipefail
+          YTDLP="$HOME/.local/bin/yt-dlp"
+          : > fast-out/download.log
+          download_one() {
+            local label="$1" host="$2"
+            local args=(--no-playlist --impersonate chrome --socket-timeout 18 --retries 1 --fragment-retries 1 --restrict-filenames --max-filesize 250M -P dsh-handoff/downloads -o '%(title).100s_[%(id)s].%(ext)s' --print 'after_move:filepath' -f 'best[height<=1080]/best')
+            [ -n "$host" ] && args+=(--extractor-args "tiktok:api_hostname=$host")
+            echo "TRY $label api=$host" | tee -a fast-out/download.log >&2
+            set +e
+            "$YTDLP" "${args[@]}" "$TARGET_URL" > fast-out/ytdlp.out 2>>fast-out/download.log
+            c=$?
+            set -e
+            if [ "$c" -eq 0 ]; then
+              f="$(tail -n1 fast-out/ytdlp.out)"
+              [ -n "$f" ] && [ -s "$f" ] && { echo "$f" > fast-out/downloaded_path.txt; return 0; }
+            fi
+            return 1
+          }
+          ok=0
+          for h in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
+            if download_one direct "$h"; then ok=1; break; fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo 'Direct blocked; enabling WARP.' | tee -a fast-out/download.log >&2
+            bash scripts/setup-cloudflare-warp.sh >>fast-out/download.log 2>&1 || true
+            for h in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
+              if download_one warp "$h"; then ok=1; break; fi
+            done
+          fi
+          if [ "$ok" -ne 1 ]; then
+            echo 'WARP blocked; rotating VPNGate egress, TikTok URL unchanged.' | tee -a fast-out/download.log >&2
+            set +e
+            v="$(YTDLP_BIN="$YTDLP" DSH_MEDIA_MODE=video bash scripts/dsh-ytdlp-vpngate.sh "$TARGET_URL" 1080 2>>fast-out/download.log)"
+            c=$?
+            set -e
+            if [ "$c" -eq 0 ] && [ -n "$v" ] && [ -s "$v" ]; then echo "$v" > fast-out/downloaded_path.txt; ok=1; fi
+          fi
+          warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+          [ "$ok" -eq 1 ] || { tail -n 120 fast-out/download.log >&2; exit 12; }
+          V="$(cat fast-out/downloaded_path.txt)"
+          cp "$V" fast-out/reference.${V##*.}
+          ffprobe -v error -show_streams -show_format -of json "$V" > fast-out/ffprobe.json
+
+      - name: Build analysis frames
+        run: |
+          set -euo pipefail
+          V="$(find fast-out -maxdepth 1 -type f -name 'reference.*' | head -n1)"
+          mkdir -p fast-out/frames10
+          ffmpeg -y -v error -i "$V" -vf 'fps=10,scale=640:-2' -q:v 2 fast-out/frames10/f_%05d.jpg
+          python3 - <<'PY'
+          from PIL import Image,ImageDraw
+          from pathlib import Path
+          import math
+          fs=sorted(Path('fast-out/frames10').glob('*.jpg'))
+          per=50; cols=5
+          for si in range(math.ceil(len(fs)/per)):
+              chunk=fs[si*per:(si+1)*per]
+              if not chunk: continue
+              cells=[]
+              for gi,p in enumerate(chunk,start=si*per):
+                  im=Image.open(p).convert('RGB'); c=Image.new('RGB',(640,im.height+26),'black'); c.paste(im,(0,0)); ImageDraw.Draw(c).text((8,im.height+4),f'{gi/10:.2f}s',fill='white'); cells.append(c)
+              h=cells[0].height; rows=math.ceil(len(cells)/cols); out=Image.new('RGB',(640*cols,h*rows),'black')
+              for i,c in enumerate(cells): out.paste(c,((i%cols)*640,(i//cols)*h))
+              out.save(f'fast-out/contact10_{si+1:02d}.jpg',quality=90)
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahoraga-tiktok-fast-${{ github.run_id }}
+          path: fast-out/
+          retention-days: 2
+          if-no-files-found: error
+
+      - name: Final status
+        if: always()
+        run: |
+          set -euo pipefail
+          STATUS='${{ job.status }}'; PRESENT=false; TARGET=''
+          [ "$STATUS" = success ] && PRESENT=true
+          [ -f fast-out/target_url.txt ] && TARGET="$(cat fast-out/target_url.txt)"
+          python3 - "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$TARGET" <<'PY'
+          import json,sys
+          st,r,p,t=sys.argv[1:]
+          open('dsh-mahoraga-tiktok-fast-status.json','w').write(json.dumps({'status':st,'phase':'done','run_id':r,'artifact_present':p=='true','artifact_name':f'mahoraga-tiktok-fast-{r}','source':'tiktok-direct','target_url':t})+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-fast-status.json
+          git commit -m 'Update TikTok fast direct status [skip ci]' || true
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin HEAD:"$GITHUB_REF_NAME"
