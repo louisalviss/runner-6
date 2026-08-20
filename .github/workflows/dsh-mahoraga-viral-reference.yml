@@ -1,0 +1,66 @@
+name: DSH Mahoraga viral reference
+
+on:
+  push:
+    paths:
+      - 'dsh-mahoraga-viral-reference-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg and downloader
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+
+      - name: Download viral Mahoraga reference
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff/downloads
+          mkdir -p dsh-handoff/downloads reference-out
+          bash scripts/dsh-download-media.sh 'https://www.youtube.com/watch?v=EqvJXq81jw8' 1080
+          cp dsh-handoff/downloads/* reference-out/
+          cp dsh-handoff/handoff.json reference-out/handoff.json
+
+      - name: Probe and create analysis assets
+        run: |
+          set -euo pipefail
+          V="$(find reference-out -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mkv' \) | head -n1)"
+          test -n "$V"
+          ffprobe -v error -show_streams -show_format -of json "$V" > reference-out/ffprobe.json
+          mkdir -p reference-out/frames
+          ffmpeg -y -v error -i "$V" -vf "fps=4,scale=480:-2" -q:v 2 reference-out/frames/f_%04d.jpg
+          python - <<'PY'
+          from PIL import Image, ImageOps, ImageDraw
+          import glob, math, os
+          files=glob.glob('reference-out/frames/*.jpg')
+          files=files[:80]
+          thumbs=[]
+          for i,p in enumerate(files):
+              im=Image.open(p).convert('RGB')
+              canvas=Image.new('RGB',(480,300),'black')
+              canvas.paste(im,((480-im.width)//2,0))
+              ImageDraw.Draw(canvas).text((8,276),f'{i/4:.2f}s',fill='white')
+              thumbs.append(canvas)
+          cols=4; rows=math.ceil(len(thumbs)/cols)
+          out=Image.new('RGB',(480*cols,300*rows),'black')
+          for i,im in enumerate(thumbs): out.paste(im,((i%cols)*480,(i//cols)*300))
+          out.save('reference-out/contact_4fps.jpg',quality=92)
+          PY
+
+      - name: Upload reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahoraga-viral-reference-${{ github.run_id }}
+          path: reference-out/
+          retention-days: 2
+          if-no-files-found: error
