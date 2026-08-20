@@ -1,1 +1,1 @@
-{"status":"decrypt_error","run_id":"32383972121","client_id":"warpprod_e5fade8fbab7b2aadeed6f94","provider":"openrouter-v4","model":"deepseek/deepseek-v4-flash-0731","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false}
+{"status":"decrypt_error","run_id":"32383972121","client_id":"warpprod_e5fade8fbab7b2aadeed6f94","provider":"openrouter-v4","model":"deepseek/deepseek-v4-flash-0731","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false,"artifact_encrypted":false}
