@@ -318,6 +318,9 @@ jobs:
           node workspace/scripts/dsh-handoff-crypto.mjs encrypt-json \
             "$RUNNER_TEMP/result.json" "$RUNNER_TEMP/dsh-session-key.b64" \
             "$RUNNER_TEMP/result.enc.json" "$CID" "$GITHUB_RUN_ID"
+          node workspace/scripts/dsh-mirror-encrypt.mjs \
+            "$RUNNER_TEMP/result.json" workspace/dsh-mirror-public.pem \
+            "$RUNNER_TEMP/mirror-result.enc.json" "$GITHUB_RUN_ID"
           rm -f "$RUNNER_TEMP/result.json"
 
       - name: Publish encrypted result and safe final status
@@ -333,12 +336,13 @@ jobs:
           STATUS="${DECRYPT_STATUS:-error}"
           if [ "${DECRYPT_READY:-false}" = true ] && [ -f "$RUNNER_TEMP/final-status.txt" ]; then STATUS="$(cat "$RUNNER_TEMP/final-status.txt")"; fi
           ART=false; [ "${MEDIA_PRESENT:-false}" = true ] && ART=true
-          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":%s,"artifact_encrypted":false}\n' \
-            "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" > "$RUNNER_TEMP/status.json"
+          printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":%s,"artifact_encrypted":false,"mirror_present":%s}\n' \
+            "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" "$([ -f "$RUNNER_TEMP/mirror-result.enc.json" ] && printf true || printf false)" > "$RUNNER_TEMP/status.json"
           put(){ P="$1"; F="$2"; M="$3"; C="$(base64 -w0 "$F")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"; if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f branch=main >/dev/null; fi; }
           [ -f "$RUNNER_TEMP/result.enc.json" ] && put dsh-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted DSH v3 result [skip ci]'
+          [ -f "$RUNNER_TEMP/mirror-result.enc.json" ] && put dsh-mirror-result.enc.json "$RUNNER_TEMP/mirror-result.enc.json" 'Update encrypted DSH mirror result [skip ci]'
           put dsh-status.json "$RUNNER_TEMP/status.json" 'Update safe DSH v3 status [skip ci]'
-          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/request.enc" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt" "$RUNNER_TEMP/download-output.txt" "$RUNNER_TEMP/download-error.txt"
+          rm -f "$RUNNER_TEMP/dsh-task.txt" "$RUNNER_TEMP/dsh-session-key.b64" "$RUNNER_TEMP/request.enc" "$RUNNER_TEMP/dsh-output.txt" "$RUNNER_TEMP/dsh-error.txt" "$RUNNER_TEMP/download-output.txt" "$RUNNER_TEMP/download-error.txt" "$RUNNER_TEMP/mirror-result.enc.json"
 
       - name: Validate
         if: always()
