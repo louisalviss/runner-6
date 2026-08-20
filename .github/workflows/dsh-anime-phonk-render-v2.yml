@@ -19,7 +19,9 @@ jobs:
     timeout-minutes: 20
     env:
       VIDEO_URL: "https://www.youtube.com/watch?v=lDzXBSxAxKw"
-      MUSIC_URL: "https://pixabay.com/music/phonk-drift-strong-anime-phonk-511423/"
+      MUSIC_URL: "https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-metaphonk.mp3"
+      MUSIC_LICENSE_PAGE: "https://www.free-stock-music.com/alex-productions-metaphonk.html"
+      MUSIC_CREDIT: "Metaphonk by Alex-Productions | https://onsound.eu/ | CC BY 3.0"
       STATUS_FILE: "dsh-anime-phonk-render-v2-status.json"
       OUTPUT_FILE: "dsh-handoff/render/sukuna_mahoraga_phonk_v2.mp4"
     steps:
@@ -50,7 +52,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
           bash scripts/setup-dsh-media-tools.sh
-          python -m pip install --user -q curl-cffi
           command -v ffmpeg
           command -v ffprobe
 
@@ -66,55 +67,23 @@ jobs:
           test -s "$P"
           echo "path=$P" >> "$GITHUB_OUTPUT"
 
-      - name: Download licensed anime phonk
+      - name: Download licensed Metaphonk MP3
         id: music
         working-directory: workspace
         run: |
           set -euo pipefail
-          set +e
-          bash scripts/dsh-download-media.sh "${MUSIC_URL}#dsh-audio" 720
-          CODE=$?
-          set -e
-          if [ "$CODE" -eq 0 ]; then
-            P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-          else
-            echo "Generic downloader blocked by Pixabay; using browser-impersonation fallback."
-            P="$(python - <<'PY'
-          import html, os, re
-          from pathlib import Path
-          from curl_cffi import requests
-
-          page = os.environ['MUSIC_URL']
-          headers = {'Referer':'https://pixabay.com/','Accept-Language':'en-US,en;q=0.9'}
-          r = requests.get(page, impersonate='chrome', headers=headers, timeout=45)
-          r.raise_for_status()
-          text = r.text.replace('\\/','/').replace('\\u0026','&')
-          urls = re.findall(r'https://cdn\.pixabay\.com/(?:download/audio|audio)/[^"\'<>\\s]+', text)
-          urls = [html.unescape(u) for u in urls]
-          urls = list(dict.fromkeys(urls))
-          preferred = [u for u in urls if '/download/audio/' in u and '.mp3' in u]
-          fallback = [u for u in urls if '.mp3' in u]
-          candidates = preferred or fallback
-          if not candidates:
-              raise SystemExit('No Pixabay MP3 URL found in impersonated page HTML')
-          out = Path('dsh-handoff/downloads/pixabay_drift_strong_anime_phonk.mp3')
-          last = None
-          for u in candidates[:8]:
-              try:
-                  rr = requests.get(u, impersonate='chrome', headers={'Referer':page}, timeout=60)
-                  if rr.status_code == 200 and len(rr.content) > 100000:
-                      out.write_bytes(rr.content)
-                      print(out)
-                      raise SystemExit(0)
-                  last = f'{rr.status_code} {len(rr.content)}'
-              except Exception as e:
-                  last = repr(e)
-          raise SystemExit(f'Pixabay CDN fetch failed: {last}')
-          PY
-            )"
-          fi
+          P="dsh-handoff/downloads/alex-productions-metaphonk.mp3"
+          curl --fail --location --retry 2 --retry-all-errors \
+            --connect-timeout 20 --max-time 120 \
+            -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36' \
+            -e "$MUSIC_LICENSE_PAGE" \
+            "$MUSIC_URL" -o "$P"
           test -s "$P"
+          BYTES="$(stat -c '%s' "$P")"
+          test "$BYTES" -gt 500000
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1 "$P"
           echo "path=$P" >> "$GITHUB_OUTPUT"
+          echo "bytes=$BYTES" >> "$GITHUB_OUTPUT"
 
       - name: Render edit
         working-directory: workspace
@@ -142,6 +111,16 @@ jobs:
           assert int(p['format']['size']) > 1000000
           PY
 
+      - name: Write music credit
+        working-directory: workspace
+        run: |
+          cat > dsh-handoff/render/MUSIC_CREDIT.txt <<'EOF'
+          Metaphonk by Alex-Productions | https://onsound.eu/
+          Royalty Free Music by https://www.free-stock-music.com
+          Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
+          https://creativecommons.org/licenses/by/3.0/deed.en_US
+          EOF
+
       - name: Upload video
         uses: actions/upload-artifact@v4
         with:
@@ -150,6 +129,7 @@ jobs:
             workspace/dsh-handoff/render/sukuna_mahoraga_phonk_v2.mp4
             workspace/dsh-handoff/render/edit-analysis.json
             workspace/dsh-handoff/render/ffprobe.json
+            workspace/dsh-handoff/render/MUSIC_CREDIT.txt
           retention-days: 2
           compression-level: 0
           if-no-files-found: error
@@ -167,7 +147,16 @@ jobs:
           v=Path(os.environ['OUTPUT_FILE'])
           a=Path('dsh-handoff/render/edit-analysis.json')
           q=Path('dsh-handoff/render/ffprobe.json')
-          d={'status':'success' if v.exists() and v.stat().st_size else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':bool(v.exists() and v.stat().st_size),'video_url':os.environ['VIDEO_URL'],'music_url':os.environ['MUSIC_URL']}
+          d={
+            'status':'success' if v.exists() and v.stat().st_size else 'error',
+            'phase':'done',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'artifact_present':bool(v.exists() and v.stat().st_size),
+            'video_url':os.environ['VIDEO_URL'],
+            'music_url':os.environ['MUSIC_URL'],
+            'music_license_page':os.environ['MUSIC_LICENSE_PAGE'],
+            'music_credit':os.environ['MUSIC_CREDIT']
+          }
           if v.exists(): d['bytes']=v.stat().st_size
           if a.exists():
             try:d['edit_analysis']=json.loads(a.read_text())
