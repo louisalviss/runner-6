@@ -14,7 +14,7 @@ permissions:
 jobs:
   fetch-reference:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -37,13 +37,38 @@ jobs:
 
       - name: Resolve and download original TikTok reference
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -rf reference-out
           mkdir -p reference-out
-          python3 scripts/dsh-download-tiktok-reference.py \
-            --username divine_daniel21 \
-            --query 'Mahoraga x The Largest' \
-            --out-dir reference-out
+
+          resolve() {
+            python3 scripts/dsh-download-tiktok-reference.py \
+              --username divine_daniel21 \
+              --query 'Mahoraga x The Largest' \
+              --out-dir reference-out
+          }
+
+          set +e
+          resolve
+          CODE=$?
+          set -e
+
+          if [ "$CODE" -ne 0 ]; then
+            echo 'Direct TikTok metadata route blocked; retrying through Cloudflare WARP.' >&2
+            rm -rf reference-out
+            mkdir -p reference-out
+            bash scripts/setup-cloudflare-warp.sh
+            set +e
+            resolve
+            CODE=$?
+            set -e
+            warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+          fi
+
+          if [ "$CODE" -ne 0 ]; then
+            echo 'TikTok resolver failed both direct and WARP routes.' >&2
+            exit "$CODE"
+          fi
 
       - name: Build frame analysis assets
         run: |
