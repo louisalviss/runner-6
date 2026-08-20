@@ -1,0 +1,2 @@
+2026-08-20 benchmark
+objective: same anime/phonk discovery task as V4 Pro; Nemotron free only; no retrigger
