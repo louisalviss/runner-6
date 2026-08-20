@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: runner-6-dsh-anime-phonk-render
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   render:
@@ -28,7 +28,13 @@ jobs:
 
       - name: Install media tools
         working-directory: workspace
-        run: bash scripts/setup-dsh-media-tools.sh
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
 
       - name: Download DSH-selected scene source
         id: video
