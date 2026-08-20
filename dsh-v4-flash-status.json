@@ -1,9 +1,30 @@
 {
-  "run_id": "32314254448",
-  "model_id": "deepseek/deepseek-v4-flash",
-  "dsh_exit_code": "124",
-  "agent_seconds": 240,
-  "download_exit_code": "",
-  "download_seconds": 0,
-  "artifact_present": false
+  "run_id": "32382928530",
+  "model_id": "deepseek/deepseek-v4-flash-0731",
+  "dsh_exit_code": "0",
+  "agent_seconds": 177,
+  "download_exit_code": "0",
+  "download_seconds": 52,
+  "selection": {
+    "selected_title": "METAMORPHOSIS",
+    "artist": "INTERWORLD",
+    "selected_url": "https://www.youtube.com/watch?v=lJvRohYSrZM",
+    "reason": "Canonical ORIGINAL version of the requested track. Found on the INTERWORLD Official Artist Channel (The Orchard Enterprises audio), titled exactly 'METAMORPHOSIS' with no qualifiers. It is the clean original 2:23 recording (238M views, uploaded 4 years ago), not Slowed, Slowed + Reverb, Sped Up, remix, edit, METAMORPHOSIS 2, compilation, reaction, or repost.",
+    "evidence": "YouTube search for 'INTERWORLD METAMORPHOSIS' surfaced many variants (The Vibe Guide 2:24, Chill Nation 2:23, PHONK DOMAIN 2:23, INTERWORLD - Topic METAMORPHOSIS (Slowed + Reverb), METAMORPHOSIS 2, METAMORPHOSIS (Sped Up), extended mixes, 1-hour loops, edits). Verifying watch page for https://www.youtube.com/watch?v=lJvRohYSrZM showed: title 'METAMORPHOSIS', artist INTERWORLD with Official Artist Channel badge, 238M views, 4 years ago, description auto-generated 'METAMORPHOSIS · INTERWORLD · IVAN BELOZEROV' provided by The Orchard. This is the canonical master track by INTERWORLD, clean length 2:23 within the 1.5-6 min policy target, from the official/label source.",
+    "verified": {
+      "title": "METAMORPHOSIS",
+      "artist": "INTERWORLD",
+      "version": "Original",
+      "source_clean": true,
+      "official": true
+    }
+  },
+  "handoff": {
+    "source_url": "https://www.youtube.com/watch?v=lJvRohYSrZM",
+    "relative_path": "dsh-handoff/downloads/METAMORPHOSIS_[lJvRohYSrZM].m4a",
+    "bytes": 2314008,
+    "max_height": 720,
+    "media_type": "audio"
+  },
+  "artifact_present": true
 }
