@@ -1,0 +1,5 @@
+2026-08-20T15:34+07:00
+concept: fast-fight > stutter > aura-farm > payoff
+music: Yara Yara aura sound
+source: Sukuna vs Mahoraga
+nonce: v4-render-1
