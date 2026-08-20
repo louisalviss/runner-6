@@ -1,0 +1,111 @@
+name: DSH Anime Phonk References Only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-anime-phonk-refs-only-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-anime-phonk-refs-only
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      OUT_FILE: "dsh-anime-phonk-references.json"
+      STATUS_FILE: "dsh-anime-phonk-refs-only-status.json"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+      - name: Configure OpenRouter DeepSeek
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+      - name: Activate DSH + browser
+        run: |
+          bash workspace/scripts/activate-dsh-runtime.sh
+          bash workspace/scripts/setup-dsh-playwright.sh workspace
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":"%s"}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk refs research running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk refs research running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+      - name: DSH research and write references
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff; mkdir -p dsh-handoff
+          TASK='As of 2026-08-21, produce exactly THREE strong short-form anime + phonk/funk editing references that were demonstrably viral/high-performing on TikTok. We are learning reusable anime-combat editing grammar, not copying creator assets. Reference 1 seed is already technically verified: creator @divine_daniel21, title Mahoraga x The Largest (BigXthaPlug) Edit, TikTok public evidence approximately 8.69M views / 1.29M likes, exact worker-tested mirror https://www.youtube.com/watch?v=EqvJXq81jw8 . Keep that as entry 1. Find TWO additional distinct references with strong public evidence (prefer multi-million TikTok views/likes or reputable trend documentation) and concrete public downloadable mirror URLs, preferably exact YouTube/Shorts mirrors. TikTok itself may be blocked. Do not research final footage or final music. Write dsh-handoff/references.json with one top-level key references, array length exactly 3. Fields per entry: creator, caption_or_title, tiktok_url (empty allowed if exact URL cannot be verified), mirror_url (required), views, likes, phonk_track, evidence (short array of source URLs/facts), why_reference. URLs must be actually observed. Entry 1 mirror_url must be exactly https://www.youtube.com/watch?v=EqvJXq81jw8 . You already reached the point of having three references in a previous attempt, so prioritize writing the JSON as soon as the two additional candidates are verified. Finish with DSH_REFERENCES_READY.'
+          set +e
+          timeout --signal=TERM --kill-after=10s 330s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/refs-out.txt" 2> "$RUNNER_TEMP/refs-err.txt"
+          CODE=$?; set -e
+          if [ "$CODE" -ne 0 ]; then echo '---stderr---'; tail -160 "$RUNNER_TEMP/refs-err.txt" || true; echo '---stdout---'; tail -160 "$RUNNER_TEMP/refs-out.txt" || true; exit "$CODE"; fi
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/references.json')); rs=p['references']; assert len(rs)==3,rs; assert rs[0]['mirror_url']=='https://www.youtube.com/watch?v=EqvJXq81jw8';
+          for r in rs: assert r.get('creator') and r.get('caption_or_title') and r.get('mirror_url') and r.get('evidence'),r
+          print(json.dumps(p,ensure_ascii=False,indent=2))
+          PY
+      - name: Commit references and final status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp dsh-handoff/references.json "$RUNNER_TEMP/references.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/references.json")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE" -f message='Store verified anime phonk references [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE" -f message='Store verified anime phonk references [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+          printf '{"status":"success","run_id":"%s","references_file":"%s"}\n' "$GITHUB_RUN_ID" "$OUT_FILE" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk refs research success [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
