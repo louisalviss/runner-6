@@ -54,7 +54,8 @@ jobs:
           set -e
 
           if [ "$CODE" -ne 0 ]; then
-            echo 'Direct TikTok metadata route blocked; retrying through Cloudflare WARP.' >&2
+            echo 'Direct route failed; preserving diagnostics before WARP retry.' >&2
+            cp reference-out/discovery.json /tmp/tiktok-discovery-direct.json 2>/dev/null || true
             rm -rf reference-out
             mkdir -p reference-out
             bash scripts/setup-cloudflare-warp.sh
@@ -63,14 +64,18 @@ jobs:
             CODE=$?
             set -e
             warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+            if [ -f /tmp/tiktok-discovery-direct.json ] && [ ! -f reference-out/discovery-direct.json ]; then
+              cp /tmp/tiktok-discovery-direct.json reference-out/discovery-direct.json
+            fi
           fi
 
           if [ "$CODE" -ne 0 ]; then
-            echo 'TikTok resolver failed both direct and WARP routes.' >&2
+            echo 'TikTok resolver failed direct and WARP routes; diagnostics retained.' >&2
             exit "$CODE"
           fi
 
       - name: Build frame analysis assets
+        if: success()
         run: |
           set -euo pipefail
           V="$(find reference-out -maxdepth 1 -type f -name '*.mp4' | head -n1)"
@@ -96,19 +101,21 @@ jobs:
           PY
 
       - name: Detect hard cuts
+        if: success()
         run: |
           set -euo pipefail
           V="$(find reference-out -maxdepth 1 -type f -name '*.mp4' | head -n1)"
           ffmpeg -hide_banner -i "$V" -filter_complex "select='gt(scene,0.28)',metadata=print:file=reference-out/scene-cuts.txt" -an -f null - 2>/dev/null || true
 
-      - name: Upload direct TikTok reference
+      - name: Upload TikTok reference or diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mahoraga-tiktok-reference-${{ github.run_id }}
           path: reference-out/
           retention-days: 2
           compression-level: 0
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Publish final status
         if: always()
@@ -117,23 +124,33 @@ jobs:
           STATUS='${{ job.status }}'
           PRESENT=false
           META='{}'
+          DISCOVERY='{}'
           if [ -f reference-out/tiktok-reference.json ]; then
             PRESENT=true
             META="$(python3 - <<'PY'
           import json
-          from pathlib import Path
-          p=Path('reference-out/tiktok-reference.json')
-          d=json.loads(p.read_text())
+          d=json.load(open('reference-out/tiktok-reference.json'))
           keep={k:d.get(k) for k in ['resolver','username','title','video_id','original_tiktok_url','play_count','digg_count','bytes']}
           print(json.dumps(keep,separators=(',',':')))
           PY
             )"
           fi
-          python3 - "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$META" <<'PY'
+          if [ -f reference-out/discovery.json ]; then
+            DISCOVERY="$(python3 - <<'PY'
+          import json
+          d=json.load(open('reference-out/discovery.json'))
+          keep={k:d.get(k) for k in ['video_id','original_tiktok_url','urlebird_href','urlebird_detail_url','score','tikwm_error','worker_error']}
+          print(json.dumps(keep,separators=(',',':')))
+          PY
+            )"
+          fi
+          python3 - "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$META" "$DISCOVERY" <<'PY'
           import json,sys
-          status,run_id,present,meta=sys.argv[1:]
+          status,run_id,present,meta,discovery=sys.argv[1:]
           out={'status':status,'run_id':run_id,'artifact_present':present=='true'}
           try: out['reference']=json.loads(meta)
+          except: pass
+          try: out['discovery']=json.loads(discovery)
           except: pass
           open('dsh-mahoraga-tiktok-reference-status.json','w').write(json.dumps(out,separators=(',',':'))+'\n')
           PY
