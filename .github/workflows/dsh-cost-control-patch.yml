@@ -24,6 +24,9 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          GH_SECRET = '$' + '{{ secrets.OPENROUTER_API_KEY }}'
+          GH_TURN_COST = '$' + '{{ steps.turn_cost.outputs.cost_usd }}'
+
           def replace_once(text, old, new, label):
               if new in text:
                   return text
@@ -109,7 +112,7 @@ jobs:
           before_step = '''      - name: Snapshot OpenRouter usage before
             if: steps.decrypt.outputs.ready == 'true'
             env:
-              OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+              OPENROUTER_API_KEY: __GH_SECRET__
             run: |
               set -euo pipefail
               : > "$RUNNER_TEMP/or-usage-before.txt"
@@ -131,7 +134,7 @@ jobs:
               rm -f "$RUNNER_TEMP/or-key-before.json"
               unset OPENROUTER_API_KEY
 
-'''
+'''.replace('__GH_SECRET__', GH_SECRET)
           if '      - name: Snapshot OpenRouter usage before\n' not in s:
               anchor = '      - name: Restore verified DSH runtime\n'
               if anchor not in s:
@@ -142,7 +145,7 @@ jobs:
             id: turn_cost
             if: steps.decrypt.outputs.ready == 'true'
             env:
-              OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+              OPENROUTER_API_KEY: __GH_SECRET__
             run: |
               set -euo pipefail
               echo 'cost_usd=' >> "$GITHUB_OUTPUT"
@@ -168,7 +171,7 @@ jobs:
               rm -f "$RUNNER_TEMP/or-key-after.json" "$RUNNER_TEMP/or-usage-before.txt"
               unset OPENROUTER_API_KEY
 
-'''
+'''.replace('__GH_SECRET__', GH_SECRET)
           if '      - name: Measure OpenRouter turn cost\n' not in s:
               anchor = '      - name: Execute queued media download\n'
               if anchor not in s:
@@ -177,8 +180,8 @@ jobs:
 
           s = replace_once(
               s,
-              '          MEDIA_COUNT: ${{ steps.media.outputs.count }}',
-              '          MEDIA_COUNT: ${{ steps.media.outputs.count }}\n          TURN_COST_USD: ${{ steps.turn_cost.outputs.cost_usd }}',
+              '          MEDIA_COUNT: $' + '{{ steps.media.outputs.count }}',
+              '          MEDIA_COUNT: $' + '{{ steps.media.outputs.count }}' + '\n          TURN_COST_USD: ' + GH_TURN_COST,
               'turn cost env')
 
           s = replace_once(
@@ -223,10 +226,14 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'deepseek/deepseek-v4-flash-0731' .github/workflows/dsh-secure.yml
-          grep -q 'maxTokens: ${DSH_MAX_TOKENS}' .github/workflows/dsh-secure.yml
+          grep -Fq 'maxTokens: ${DSH_MAX_TOKENS}' .github/workflows/dsh-secure.yml
           grep -q 'Measure OpenRouter turn cost' .github/workflows/dsh-secure.yml
           grep -q '/pro = Pro' dsh-console/index.html
           grep -q 'costUsd' dsh-console/index.html
+          if grep -Eq 'OPENROUTER_API_KEY: (sk-|or-|[A-Za-z0-9_-]{30,})' .github/workflows/dsh-secure.yml; then
+            echo 'Refusing to commit a literal OpenRouter key'
+            exit 1
+          fi
 
       - name: Commit patch
         run: |
@@ -239,6 +246,7 @@ jobs:
             exit 0
           fi
           git commit -m 'Cut DSH inference cost and expose turn cost [skip ci]'
+          git pull --rebase origin main
           git push origin HEAD:main
 
       - name: Publish marker
@@ -247,9 +255,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          STATUS=success
-          git diff --quiet || STATUS=error
-          printf '{"status":"%s","run_id":"%s","commit":"%s"}\n' "$STATUS" "$GITHUB_RUN_ID" "$(git rev-parse HEAD)" > "$RUNNER_TEMP/dsh-cost-control-status.json"
+          printf '{"status":"finished","run_id":"%s","commit":"%s"}\n' "$GITHUB_RUN_ID" "$(git rev-parse HEAD)" > "$RUNNER_TEMP/dsh-cost-control-status.json"
           C="$(base64 -w0 "$RUNNER_TEMP/dsh-cost-control-status.json")"
           F=dsh-cost-control-status.json
           S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
