@@ -1,0 +1,292 @@
+name: DSH Anime Phonk Viral Study + Render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-anime-phonk-study-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-anime-phonk-study-render
+  cancel-in-progress: true
+
+jobs:
+  study-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      STATUS_FILE: "dsh-anime-phonk-study-status.json"
+      OUT_DIR: "dsh-handoff/viral-study"
+      FINAL_VIDEO: "dsh-handoff/viral-study/final/anime_combat_learned_viral_grammar.mp4"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Configure OpenRouter DeepSeek
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+
+      - name: Activate DSH + browser
+        run: |
+          bash workspace/scripts/activate-dsh-runtime.sh
+          bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Install media analysis stack
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-opencv python3-numpy python3-pil
+          bash scripts/setup-dsh-media-tools.sh
+          python - <<'PY'
+          import cv2,numpy
+          print('cv2',cv2.__version__,'numpy',numpy.__version__)
+          PY
+
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","phase":"research","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk viral study running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk viral study running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+
+      - name: DSH research 3 viral references + new source/audio
+        id: research
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff
+          mkdir -p "$OUT_DIR"
+          TASK='Research current public web signals and identify exactly THREE high-performing TikTok anime + phonk/funk edits that are useful editing references. The target is short anime combat/high-intensity edit grammar, not generic anime compilations. One reference may be @divine_daniel21 Mahoraga x The Largest if you can verify the exact edit and mirror. Prefer distinct creators/styles and strong evidence such as multi-million views/likes, reputable trend documentation, or cross-platform mirrors. TikTok may block direct browsing: use public profile viewers/search results and exact YouTube/Shorts/Reels mirrors when needed. For EACH reference, find a concrete downloadable public mirror URL that reproduces the same edit or as close as publicly verifiable. Then independently choose ONE different anime combat source video for the NEW test edit; do not reuse the reference edit itself. Prefer a focused, visually strong, crop-resilient fight/action clip from a public source. Also choose ONE clean royalty-free or Creative-Commons phonk/funk track suitable for the new edit, with a concrete source URL, license page, and credit text; it should have an aggressive drop and tempo/energy compatible with the references. Do not copy creator text, logos, assets, or exact timing. Write dsh-handoff/viral-study/selection.json with keys: references (array length 3, each containing creator, caption_or_title, tiktok_url, mirror_url, views, likes, phonk_track, evidence, why_reference), new_source (anime, scene, url, why), final_music (title, artist, url, license_page, credit, why). URLs must be real observed URLs, never invented. Finish with DSH_VIRAL_STUDY_READY.'
+          set +e
+          timeout --signal=TERM --kill-after=10s 360s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          test "$CODE" = 0
+          test -s "$OUT_DIR/selection.json"
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/viral-study/selection.json'))
+          assert len(p['references'])==3,p
+          for r in p['references']: assert r.get('mirror_url') or r.get('tiktok_url'),r
+          assert p['new_source']['url'],p
+          assert p['final_music']['url'] and p['final_music']['license_page'] and p['final_music']['credit'],p
+          print(json.dumps(p,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Download and normalize 3 reference edits
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/ref_urls.tsv"
+          import json
+          p=json.load(open('dsh-handoff/viral-study/selection.json'))
+          for i,r in enumerate(p['references'],1): print(i, r.get('mirror_url') or r.get('tiktok_url'), r.get('tiktok_url') or '', sep='\t')
+          PY
+          while IFS=$'\t' read -r I URL FALLBACK; do
+            rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+            mkdir -p dsh-handoff/downloads "$OUT_DIR/ref$I"
+            set +e
+            bash scripts/dsh-download-media.sh "$URL" 720
+            CODE=$?
+            if [ "$CODE" -ne 0 ] && [ -n "$FALLBACK" ] && [ "$FALLBACK" != "$URL" ]; then bash scripts/dsh-download-media.sh "$FALLBACK" 720; CODE=$?; fi
+            set -e
+            [ "$CODE" -eq 0 ]
+            P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+            ffmpeg -nostdin -hide_banner -y -v error -i "$P" -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 160k -movflags +faststart "$OUT_DIR/ref$I/reference.mp4"
+            test -s "$OUT_DIR/ref$I/reference.mp4"
+          done < "$RUNNER_TEMP/ref_urls.tsv"
+
+      - name: Analyze reference audio + frames + motion
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          for I in 1 2 3; do python scripts/analyze-viral-edit.py "$OUT_DIR/ref$I/reference.mp4" "$OUT_DIR/ref$I/analysis"; done
+
+      - name: Synthesize reusable editing grammar
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,statistics
+          from pathlib import Path
+          root=Path('dsh-handoff/viral-study'); sel=json.loads((root/'selection.json').read_text()); aa=[]
+          for i in (1,2,3): aa.append(json.loads((root/f'ref{i}/analysis/analysis.json').read_text()))
+          bpms=[x['audio']['bpm'] for x in aa]; cuts=[x['visual']['median_cut_interval_sec'] for x in aa]
+          leads=[v for x in aa for v in x.get('freeze_to_impact_leads_sec',[]) if 0<=v<=.75]
+          def dens(key):
+            return [len(x['visual'].get(key,[]))/max(.1,x['visual']['duration_sec']) for x in aa]
+          g={
+            'reference_count':3,'principle':'learn reusable editing grammar; do not copy assets/text/logos/exact timing',
+            'bpm_values':bpms,'bpm_median':round(statistics.median(bpms),2),'median_cut_intervals_sec':cuts,'median_cut_interval_sec':round(statistics.median(cuts),3),
+            'freeze_lead_median_sec':round(statistics.median(leads),3) if leads else .14,
+            'flash_density_per_sec':round(statistics.median(dens('flash_times_sec')),3),'zoom_density_per_sec':round(statistics.median(dens('zoom_times_sec')),3),
+            'shake_density_per_sec':round(statistics.median(dens('shake_times_sec')),3),'color_burst_density_per_sec':round(statistics.median(dens('color_burst_times_sec')),3),
+            'motion_p90_median':round(statistics.median([x['visual']['motion_p90'] for x in aa]),3),
+            'rules':[
+              'open with a readable high-salience action/face/pose, then increase cut density rather than starting at maximum chaos',
+              'use contrast in pacing: micro-cuts around impact clusters but preserve holds/near-freezes immediately before major releases',
+              'do not cut on every beat; reserve the strongest onsets/downbeats for major impacts and use anticipation before them',
+              'localize shake/flash/chromatic/color boosts to impact frames; keep buildup cleaner so payoff has contrast',
+              'use a second escalation/finisher after the first impact instead of one flat montage',
+              'end on a short hold/reaction/pose that can bridge visually back to the opening for loopability'
+            ],
+            'references':sel['references']
+          }
+          (root/'viral_anime_phonk_grammar.json').write_text(json.dumps(g,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(g,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Download NEW anime combat source
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          URL="$(python -c "import json;print(json.load(open('$OUT_DIR/selection.json'))['new_source']['url'])")"
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json; mkdir -p dsh-handoff/downloads "$OUT_DIR/final"
+          bash scripts/dsh-download-media.sh "$URL" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 160k -movflags +faststart "$OUT_DIR/final/source.mp4"
+          test -s "$OUT_DIR/final/source.mp4"
+
+      - name: Download NEW licensed phonk/funk audio
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          URL="$(python -c "import json;print(json.load(open('$OUT_DIR/selection.json'))['final_music']['url'])")"
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json; mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "${URL}#dsh-audio" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          cp "$P" "$OUT_DIR/final/music${P##*.}" 2>/dev/null || true
+          EXT=".${P##*.}"; cp "$P" "$OUT_DIR/final/music$EXT"
+          printf '%s\n' "$OUT_DIR/final/music$EXT" > "$RUNNER_TEMP/music_path.txt"
+          test -s "$OUT_DIR/final/music$EXT"
+
+      - name: Analyze NEW source and render learned grammar
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python scripts/analyze-viral-edit.py "$OUT_DIR/final/source.mp4" "$OUT_DIR/final/source-analysis"
+          MUSIC="$(cat "$RUNNER_TEMP/music_path.txt")"
+          python scripts/render-learned-anime-combat.py "$OUT_DIR/final/source.mp4" "$MUSIC" "$OUT_DIR/viral_anime_phonk_grammar.json" "$OUT_DIR/final/source-analysis/analysis.json" "$FINAL_VIDEO" "$OUT_DIR/final/edit-plan.json"
+          python scripts/analyze-viral-edit.py "$FINAL_VIDEO" "$OUT_DIR/final/output-analysis"
+
+      - name: QA final video
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          ffprobe -v error -show_streams -show_format -of json "$FINAL_VIDEO" > "$OUT_DIR/final/ffprobe.json"
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/viral-study/final/ffprobe.json')); v=next(s for s in p['streams'] if s['codec_type']=='video'); a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          assert int(v['width'])==1080 and int(v['height'])==1920,v
+          d=float(p['format']['duration']); assert 8.5<=d<=13.0,d
+          assert int(p['format']['size'])>1000000,p['format']
+          print('QA PASS',d,v['codec_name'],a['codec_name'])
+          PY
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dsh-handoff/viral-study'); s=json.loads((root/'selection.json').read_text())
+          (root/'final/MUSIC_CREDIT.txt').write_text(s['final_music']['credit']+'\nLicense/source: '+s['final_music']['license_page']+'\n',encoding='utf-8')
+          (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps({'references':s['references'],'new_source':s['new_source'],'final_music':s['final_music']},ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+
+      - name: Upload complete study + final
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-phonk-viral-study-final-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/viral-study/selection.json
+            workspace/dsh-handoff/viral-study/viral_anime_phonk_grammar.json
+            workspace/dsh-handoff/viral-study/ref1/analysis/analysis.json
+            workspace/dsh-handoff/viral-study/ref1/analysis/contact.jpg
+            workspace/dsh-handoff/viral-study/ref2/analysis/analysis.json
+            workspace/dsh-handoff/viral-study/ref2/analysis/contact.jpg
+            workspace/dsh-handoff/viral-study/ref3/analysis/analysis.json
+            workspace/dsh-handoff/viral-study/ref3/analysis/contact.jpg
+            workspace/dsh-handoff/viral-study/final/anime_combat_learned_viral_grammar.mp4
+            workspace/dsh-handoff/viral-study/final/edit-plan.json
+            workspace/dsh-handoff/viral-study/final/ffprobe.json
+            workspace/dsh-handoff/viral-study/final/output-analysis/analysis.json
+            workspace/dsh-handoff/viral-study/final/output-analysis/contact.jpg
+            workspace/dsh-handoff/viral-study/final/MUSIC_CREDIT.txt
+            workspace/dsh-handoff/viral-study/final/SOURCE_MANIFEST.json
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish final status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          from pathlib import Path
+          root=Path('dsh-handoff/viral-study'); v=root/'final/anime_combat_learned_viral_grammar.mp4'; d={'status':'success' if v.exists() and v.stat().st_size>1000000 else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':bool(v.exists() and v.stat().st_size>1000000)}
+          if v.exists(): d['bytes']=v.stat().st_size
+          for name in ('selection.json','viral_anime_phonk_grammar.json','final/edit-plan.json','final/ffprobe.json'):
+            p=root/name
+            if p.exists():
+              try:d[name.replace('/','_')]=json.loads(p.read_text())
+              except:pass
+          print(json.dumps(d,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime phonk viral study status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime phonk viral study status [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
