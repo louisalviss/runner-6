@@ -93,7 +93,6 @@ def discover_id_urlebird(username, query):
     profile = f"https://urlebird.com/user/{urllib.parse.quote(username)}/"
     page = http_text(profile)
     candidates = []
-    # Urlebird video links are stable /video/.../. Search contextual HTML around each link.
     for m in re.finditer(r'href=["\']([^"\']*/video/[^"\']+)["\']', page, flags=re.I):
         href = html.unescape(m.group(1))
         lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
@@ -101,7 +100,6 @@ def discover_id_urlebird(username, query):
         s=score_title(context,query)
         ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)',href)
         candidates.append((s,href,ids[-1] if ids else "",norm(context)[:500]))
-    # Some builds expose the video path in JSON-escaped strings.
     for m in re.finditer(r'(?:https?:\\?/\\?/urlebird\.com)?\\?/video\\?/([^"<\\]+)', page, flags=re.I):
         frag=m.group(0).replace('\\/','/')
         lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
@@ -113,17 +111,17 @@ def discover_id_urlebird(username, query):
     if not candidates or candidates[0][0] < 200:
         raise RuntimeError(f"Urlebird could not identify a credible {query!r} post; candidates={len(candidates)}")
     s,href,vid,ctx=candidates[0]
+    detail=""
     if not vid:
         detail=urllib.parse.urljoin(profile,href)
         detail_html=http_text(detail)
         ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)', detail_html)
         if ids:
-            # Prefer IDs appearing in TikTok canonical/video URLs.
             mm=re.search(r'tiktok\.com/@[^/"\']+/video/(\d{15,22})',detail_html,re.I)
             vid=mm.group(1) if mm else ids[-1]
     if not vid:
         raise RuntimeError(f"Urlebird matched the title but exposed no TikTok video id: href={href}")
-    return vid,{"score":s,"urlebird_href":href,"context":ctx}
+    return vid,{"score":s,"urlebird_href":href,"urlebird_detail_url":detail or urllib.parse.urljoin(profile,href),"context":ctx}
 
 
 def worker_post(tiktok_url):
@@ -164,6 +162,10 @@ def validate(path):
     return data
 
 
+def persist_discovery(out_dir, discovery):
+    (out_dir/"discovery.json").write_text(json.dumps(discovery,ensure_ascii=False,indent=2),encoding="utf-8")
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--url",default="")
@@ -187,13 +189,21 @@ def main():
             vid=str(post.get("id") or post.get("video_id") or vid)
             counts={"play_count":post.get("play_count"),"digg_count":post.get("digg_count"),"comment_count":post.get("comment_count"),"share_count":post.get("share_count")}
         except Exception as e:
-            obj=worker_post(original_url)
+            discovery={"tikwm_error":repr(e),"video_id":vid,"original_tiktok_url":original_url}
+            persist_discovery(out_dir,discovery)
+            print(f"DISCOVERED_TIKTOK_ID={vid}")
+            print(f"DISCOVERED_TIKTOK_URL={original_url}")
+            try:
+                obj=worker_post(original_url)
+            except Exception as worker_e:
+                discovery["worker_error"]=repr(worker_e)
+                persist_discovery(out_dir,discovery)
+                raise
             resolver="worker-url"
             media_url=obj["download_url"]; media_field="download_url"
             title=obj.get("title") or ""; vid=str(obj.get("video_id") or vid)
             author=obj.get("author") or {}; username=(author.get("username") or username).lstrip("@")
             counts={"play_count":author.get("view_count"),"digg_count":author.get("like_count"),"comment_count":None,"share_count":None}
-            discovery={"tikwm_error":repr(e)}
     else:
         if not args.username or not args.query:
             ap.error("provide --url or both --username and --query")
@@ -212,13 +222,22 @@ def main():
         except Exception as e:
             vid,discovery=discover_id_urlebird(username,args.query)
             original_url=f"https://www.tiktok.com/@{username}/video/{vid}"
-            obj=worker_post(original_url)
+            discovery.update({"tikwm_error":repr(e),"video_id":vid,"original_tiktok_url":original_url})
+            persist_discovery(out_dir,discovery)
+            print(f"DISCOVERED_TIKTOK_ID={vid}")
+            print(f"DISCOVERED_TIKTOK_URL={original_url}")
+            print(f"URLEBIRD_HREF={discovery.get('urlebird_href','')}")
+            try:
+                obj=worker_post(original_url)
+            except Exception as worker_e:
+                discovery["worker_error"]=repr(worker_e)
+                persist_discovery(out_dir,discovery)
+                raise
             resolver="urlebird-id+cloudflare-worker+tiktok-cdn"
             media_url=obj["download_url"]; media_field="download_url"
             title=obj.get("title") or args.query
             author=obj.get("author") or {}; username=(author.get("username") or username).lstrip("@")
             counts={"play_count":author.get("view_count"),"digg_count":author.get("like_count"),"comment_count":None,"share_count":None}
-            discovery["tikwm_error"]=repr(e)
 
     safe=re.sub(r"[^A-Za-z0-9._-]+","_",f"{username}_{vid}").strip("_") or "tiktok-reference"
     video_path=out_dir/f"{safe}.mp4"
