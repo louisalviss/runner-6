@@ -1,5 +1,5 @@
-2026-08-20T14:50+07:00
+2026-08-20T14:53+07:00
 track: Metaphonk — Alex-Productions
 license: CC BY 3.0
-purpose: clean audio artifact for beat-synced edit
-nonce: fetch-licensed-metaphonk-1
+purpose: clean audio artifact for final beat-sync
+nonce: fetch-licensed-metaphonk-2
