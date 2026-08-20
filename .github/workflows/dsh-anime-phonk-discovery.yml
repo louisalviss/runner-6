@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: runner-6-dsh-anime-phonk
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   discover:
@@ -20,7 +20,7 @@ jobs:
     env:
       DSH_VERSION: "0.1.0-rc.7"
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
-      MODEL_ID: "nvidia/nemotron-3-ultra-550b-a55b:free"
+      MODEL_ID: "deepseek/deepseek-v4-pro"
 
     steps:
       - uses: actions/checkout@v4
@@ -42,22 +42,22 @@ jobs:
           cat > "$DSH_HOME/settings.yaml" <<'YAML'
           llm-pi-ai:
             providers:
-              openrouter-nemotron:
-                displayName: OpenRouter Nemotron Free
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
                 baseURL: https://openrouter.ai/api/v1
                 compat:
                   thinkingFormat: openrouter
                 models:
-                  - id: nvidia/nemotron-3-ultra-550b-a55b:free
-                    name: Nemotron 3 Ultra Free
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
                     contextWindow: 1000000
                     maxTokens: 8192
                     input: [text]
           agent-default-model:
-            provider: openrouter-nemotron
-            model: nvidia/nemotron-3-ultra-550b-a55b:free
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
 
@@ -76,6 +76,29 @@ jobs:
       - name: Configure browser
         run: bash workspace/scripts/setup-dsh-playwright.sh workspace
 
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          print(json.dumps({
+            'status':'running',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'model':'deepseek/deepseek-v4-pro'
+          },separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          F="dsh-anime-phonk-status.json"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='DSH anime phonk running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='DSH anime phonk running [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
       - name: Let DSH choose anime fight scene
         id: dsh
         working-directory: workspace
@@ -85,7 +108,7 @@ jobs:
           set -uo pipefail
           rm -rf dsh-handoff
           mkdir -p dsh-handoff
-          TASK='Use the Playwright browser and current public web information to independently identify ONE anime fight video/scene that is especially suitable for a 15-30 second TikTok/Reels edit using a currently viral phonk/funk track. Do not start from a preselected anime, character, fight, source URL, or song. Research current signals and make the choice yourself. Optimize for visual recognition, immediate hook in the first 1-2 seconds, strong impact frames, speed/energy changes that can sync to bass drops, a clear payoff/reveal, low dependence on dialogue, crop resilience for 9:16, and current social relevance. Also identify one current viral phonk/funk track that fits the selected scene. Find a public reference URL for the exact scene/video and a public reference URL for the exact music track. Do not download media. Create dsh-handoff/anime-phonk-selection.json with: anime, fight_or_scene, characters, scene_reference_url, suggested_clip_window_or_moment, suggested_duration_seconds, phonk_title, phonk_artist, phonk_reference_url, why_match, edit_plan, current_signals, confidence. current_signals must be a short array of concrete recent signals/sources. edit_plan should describe hook, buildup, drop/payoff, and ending in concise terms. Finish with DSH_ANIME_PHONK_SELECTED.'
+          TASK='Use the Playwright browser and current public web information to independently identify ONE anime fight video/scene that is especially suitable for a 15-30 second TikTok/Reels edit using a currently viral phonk/funk track. Do not start from a preselected anime, character, fight, source URL, or song. Research current signals and make the choice yourself. Optimize for visual recognition, immediate hook in the first 1-2 seconds, strong impact frames, speed/energy changes that can sync to bass drops, a clear payoff/reveal, low dependence on dialogue, crop resilience for 9:16, and current social relevance. Also independently identify one current viral phonk/funk track that fits the selected scene. Find a public reference URL for the exact scene/video and a public reference URL for the exact music track. Create dsh-handoff/anime-phonk-selection.json with: anime, fight_or_scene, characters, scene_reference_url, suggested_clip_window_or_moment, suggested_duration_seconds, phonk_title, phonk_artist, phonk_reference_url, why_match, edit_plan, current_signals, confidence. current_signals must be a short array of concrete recent signals/sources. edit_plan should describe hook, buildup, drop/payoff, and ending in concise terms. Finish with DSH_ANIME_PHONK_SELECTED.'
           START=$(date +%s)
           set +e
           timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
@@ -95,7 +118,7 @@ jobs:
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           echo "agent_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
 
-      - name: Publish status
+      - name: Publish final status
         if: always()
         working-directory: workspace
         env:
@@ -111,7 +134,7 @@ jobs:
           data={
             'status':'success' if os.environ.get('DSH_CODE')=='0' and p.exists() else 'error',
             'run_id':os.environ['GITHUB_RUN_ID'],
-            'model':'nvidia/nemotron-3-ultra-550b-a55b:free',
+            'model':'deepseek/deepseek-v4-pro',
             'dsh_exit_code':os.environ.get('DSH_CODE',''),
             'agent_seconds':int(os.environ.get('AGENT_SECONDS') or 0),
           }
