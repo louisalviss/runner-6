@@ -1,0 +1,4 @@
+2026-08-20T17:35+07:00
+concept: horizontal-only fast fight stutter aura payoff
+layout: 1920x1080
+nonce: v7-horizontal-1
