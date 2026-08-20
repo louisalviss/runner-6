@@ -1,0 +1,5 @@
+2026-08-20T21:12+07:00
+mode: direct-tiktok-only
+creator: divine_daniel21
+query: Mahoraga x The Largest
+no-youtube-mirror: true
