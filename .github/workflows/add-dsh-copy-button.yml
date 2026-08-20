@@ -1,0 +1,74 @@
+name: Add DSH Copy Button
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-copy-button-trigger.txt"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: add-dsh-copy-button
+  cancel-in-progress: true
+
+jobs:
+  patch-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add copy response button
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('dsh-console/index.html')
+          s=p.read_text()
+
+          old=".runlink{color:#8e8e8e;text-decoration:none}"
+          new=".runlink{color:#8e8e8e;text-decoration:none}.copybtn{border:0;background:transparent;color:#8e8e8e;padding:0;font:inherit;cursor:pointer}"
+          if old not in s: raise SystemExit('copy style target not found')
+          s=s.replace(old,new,1)
+
+          old="function escText(el,text){el.textContent=text||''}"
+          new="""function escText(el,text){el.textContent=text||''}\nasync function copyText(text){try{await navigator.clipboard.writeText(text);return true}catch{try{const t=document.createElement('textarea');t.value=text;t.setAttribute('readonly','');t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();t.setSelectionRange(0,t.value.length);const ok=document.execCommand('copy');t.remove();return ok}catch{return false}}}"""
+          if old not in s: raise SystemExit('copy helper target not found')
+          s=s.replace(old,new,1)
+
+          old="m.role==='assistant'&&(m.runId||m.error||m.model||typeof m.costUsd==='number')"
+          new="m.role==='assistant'&&(m.runId||m.error||m.model||typeof m.costUsd==='number'||(!m.pending&&m.text))"
+          if old not in s: raise SystemExit('meta condition target not found')
+          s=s.replace(old,new,1)
+
+          old="""if(m.error){const s=document.createElement('span');s.textContent='Error';meta.appendChild(s)}turn.appendChild(meta)"""
+          new="""if(m.error){const s=document.createElement('span');s.textContent='Error';meta.appendChild(s)}if(!m.pending&&m.text){const c=document.createElement('button');c.type='button';c.className='copybtn';c.textContent='Copy';c.setAttribute('aria-label','Copy full DSH response');c.onclick=async()=>{const ok=await copyText(m.text);c.textContent=ok?'Copied':'Copy failed';setTimeout(()=>c.textContent='Copy',1200)};meta.appendChild(c)}turn.appendChild(meta)"""
+          if old not in s: raise SystemExit('copy button target not found')
+          s=s.replace(old,new,1)
+
+          # Keep model label truthful while production is on the known-good Pro rollback.
+          s=s.replace('Encrypted</span> · public Runner 6 · DeepSeek V4 Flash 0731 · /pro = Pro','Encrypted</span> · public Runner 6 · DeepSeek V4 Pro',1)
+          s=s.replace('Default: DeepSeek V4 Flash 0731 · max output 8K. Start a message with <b>/pro</b> to use V4 Pro for that turn.','Current production: DeepSeek V4 Pro. Dual-model switch can be enabled after the Flash path is restored.',1)
+
+          p.write_text(s)
+          PY
+
+      - name: Commit UI patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add dsh-console/index.html
+          git commit -m 'Add copy button for full DSH responses [skip ci]'
+          git push
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dsh-console
+      - id: deployment
+        uses: actions/deploy-pages@v4
