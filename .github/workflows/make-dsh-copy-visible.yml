@@ -1,0 +1,45 @@
+name: Make DSH Copy Visible
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "make-dsh-copy-visible-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: make-dsh-copy-visible
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make copy action obvious
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('dsh-console/index.html')
+          s=p.read_text()
+          old=".assistant .meta{display:flex;gap:8px;align-items:center}.runlink{color:#8e8e8e;text-decoration:none}.copybtn{border:0;background:transparent;color:#8e8e8e;padding:0;font:inherit;cursor:pointer}"
+          new=".assistant .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.runlink{color:#8e8e8e;text-decoration:none}.copybtn{margin-left:auto;border:1px solid #414141;background:#242424;color:#e3e3e3;padding:6px 10px;border-radius:9px;font-size:12px;font-weight:650;line-height:1.15;cursor:pointer;white-space:nowrap}.copybtn:active{transform:scale(.97)}"
+          if old not in s:
+              raise SystemExit('copy CSS target not found')
+          s=s.replace(old,new,1)
+          old2="c.textContent='Copy';c.setAttribute('aria-label','Copy full DSH response');c.onclick=async()=>{const ok=await copyText(m.text);c.textContent=ok?'Copied':'Copy failed';setTimeout(()=>c.textContent='Copy',1200)}"
+          new2="c.textContent='⧉ Copy response';c.setAttribute('aria-label','Copy full DSH response');c.onclick=async()=>{const ok=await copyText(m.text);c.textContent=ok?'✓ Copied':'Copy failed';setTimeout(()=>c.textContent='⧉ Copy response',1400)}"
+          if old2 not in s:
+              raise SystemExit('copy button target not found')
+          s=s.replace(old2,new2,1)
+          p.write_text(s)
+          PY
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add dsh-console/index.html
+          git commit -m 'Make DSH copy response button obvious [skip ci]'
+          git push
