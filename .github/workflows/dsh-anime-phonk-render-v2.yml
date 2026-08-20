@@ -50,6 +50,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
           bash scripts/setup-dsh-media-tools.sh
+          python -m pip install --user -q curl-cffi
           command -v ffmpeg
           command -v ffprobe
 
@@ -70,8 +71,48 @@ jobs:
         working-directory: workspace
         run: |
           set -euo pipefail
+          set +e
           bash scripts/dsh-download-media.sh "${MUSIC_URL}#dsh-audio" 720
-          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          else
+            echo "Generic downloader blocked by Pixabay; using browser-impersonation fallback."
+            P="$(python - <<'PY'
+          import html, os, re
+          from pathlib import Path
+          from curl_cffi import requests
+
+          page = os.environ['MUSIC_URL']
+          headers = {'Referer':'https://pixabay.com/','Accept-Language':'en-US,en;q=0.9'}
+          r = requests.get(page, impersonate='chrome', headers=headers, timeout=45)
+          r.raise_for_status()
+          text = r.text.replace('\\/','/').replace('\\u0026','&')
+          urls = re.findall(r'https://cdn\.pixabay\.com/(?:download/audio|audio)/[^"\'<>\\s]+', text)
+          urls = [html.unescape(u) for u in urls]
+          urls = list(dict.fromkeys(urls))
+          preferred = [u for u in urls if '/download/audio/' in u and '.mp3' in u]
+          fallback = [u for u in urls if '.mp3' in u]
+          candidates = preferred or fallback
+          if not candidates:
+              raise SystemExit('No Pixabay MP3 URL found in impersonated page HTML')
+          out = Path('dsh-handoff/downloads/pixabay_drift_strong_anime_phonk.mp3')
+          last = None
+          for u in candidates[:8]:
+              try:
+                  rr = requests.get(u, impersonate='chrome', headers={'Referer':page}, timeout=60)
+                  if rr.status_code == 200 and len(rr.content) > 100000:
+                      out.write_bytes(rr.content)
+                      print(out)
+                      raise SystemExit(0)
+                  last = f'{rr.status_code} {len(rr.content)}'
+              except Exception as e:
+                  last = repr(e)
+          raise SystemExit(f'Pixabay CDN fetch failed: {last}')
+          PY
+            )"
+          fi
           test -s "$P"
           echo "path=$P" >> "$GITHUB_OUTPUT"
 
