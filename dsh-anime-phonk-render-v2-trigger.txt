@@ -1,5 +1,6 @@
-2026-08-20T08:00+07:00
+2026-08-20T14:30+07:00
 scene: sukuna-vs-mahoraga
-music: montagem-alquimia
-mode: split-recut-vertical-drop-sync
-nonce: v2-crop-fixed-1
+music: pixabay-drift-strong-anime-phonk
+layout: full-frame-on-blurred-vertical
+objective: preserve action readability, 33s build-up, stronger anime/drift phonk
+nonce: readable-long-v2-1
