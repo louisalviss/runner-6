@@ -108,7 +108,7 @@ cut_times=[]; acc=0.0
 for seg in segments[:-1]:
     acc += seg[4]; cut_times.append(acc)
 flash_expr='+'.join([f'between(t,{x:.3f},{x+0.050:.3f})' for x in cut_times])
-filters.append(f"[vcat]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.28:t=fill:enable='{flash_expr}',fade=t=in:st=0:d=.08,fade=t=out:st={out_duration-.25:.3f}:d=.25[vout]")
+filters.append(f"[vcat]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.28:t=fill:enable='{flash_expr}',fade=t=in:st=0:d=0.08,fade=t=out:st={out_duration-.25:.3f}:d=0.25[vout]")
 filters.append(f'[1:a]atrim=start={audio_start:.3f}:duration={out_duration:.3f},asetpts=PTS-STARTPTS,volume=1.02,loudnorm=I=-12:TP=-1.0:LRA=6[music]')
 if source_has_audio:
     filters.append('[sfxcat]volume=0.22,highpass=f=100[sfx]')
