@@ -49,6 +49,18 @@ def score_title(title, query):
     return hit * 100 - abs(len(t) - len(q))
 
 
+def card_score(href, context, query):
+    href_score = score_title(href, query)
+    context_score = score_title(context, query)
+    # The URL slug belongs to exactly one Urlebird card. Give it overwhelming
+    # priority over neighboring card text to avoid cross-card false matches.
+    if href_score >= 1000:
+        return 100000 + href_score, href_score, context_score
+    if href_score >= 200:
+        return 10000 + href_score, href_score, context_score
+    return context_score, href_score, context_score
+
+
 def tikwm_post(identifier):
     qs = urllib.parse.urlencode({"url": identifier, "hd": "1"})
     obj = http_json(f"{TIKWM}/?{qs}")
@@ -95,22 +107,22 @@ def discover_id_urlebird(username, query):
     candidates = []
     for m in re.finditer(r'href=["\']([^"\']*/video/[^"\']+)["\']', page, flags=re.I):
         href = html.unescape(m.group(1))
-        lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
+        lo=max(0,m.start()-500); hi=min(len(page),m.end()+800)
         context=page[lo:hi]
-        s=score_title(context,query)
+        score,href_score,context_score=card_score(href,context,query)
         ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)',href)
-        candidates.append((s,href,ids[-1] if ids else "",norm(context)[:500]))
+        candidates.append((score,href,ids[-1] if ids else "",norm(context)[:500],href_score,context_score))
     for m in re.finditer(r'(?:https?:\\?/\\?/urlebird\.com)?\\?/video\\?/([^"<\\]+)', page, flags=re.I):
         frag=m.group(0).replace('\\/','/')
-        lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
+        lo=max(0,m.start()-500); hi=min(len(page),m.end()+800)
         context=page[lo:hi]
-        s=score_title(context,query)
+        score,href_score,context_score=card_score(frag,context,query)
         ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)',frag)
-        candidates.append((s,frag,ids[-1] if ids else "",norm(context)[:500]))
+        candidates.append((score,frag,ids[-1] if ids else "",norm(context)[:500],href_score,context_score))
     candidates.sort(key=lambda x:x[0],reverse=True)
     if not candidates or candidates[0][0] < 200:
         raise RuntimeError(f"Urlebird could not identify a credible {query!r} post; candidates={len(candidates)}")
-    s,href,vid,ctx=candidates[0]
+    s,href,vid,ctx,href_score,context_score=candidates[0]
     detail=""
     if not vid:
         detail=urllib.parse.urljoin(profile,href)
@@ -121,7 +133,7 @@ def discover_id_urlebird(username, query):
             vid=mm.group(1) if mm else ids[-1]
     if not vid:
         raise RuntimeError(f"Urlebird matched the title but exposed no TikTok video id: href={href}")
-    return vid,{"score":s,"urlebird_href":href,"urlebird_detail_url":detail or urllib.parse.urljoin(profile,href),"context":ctx}
+    return vid,{"score":s,"href_score":href_score,"context_score":context_score,"urlebird_href":href,"urlebird_detail_url":detail or urllib.parse.urljoin(profile,href),"context":ctx}
 
 
 def worker_post(tiktok_url):
