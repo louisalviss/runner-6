@@ -1,4 +1,4 @@
-2026-08-20T06:41+07:00
+2026-08-20T21:55+07:00
 case: METAMORPHOSIS — INTERWORLD original
-model: deepseek/deepseek-v4-flash
-retrigger: workflow already present on main
+model: deepseek/deepseek-v4-flash-0731
+purpose: validate current Flash before production cost-routing
