@@ -50,12 +50,12 @@ for idx,(start,end,speed,role,target_d) in enumerate(segments):
     raw_d=(end-start)/speed; pts_scale=target_d/max(raw_d,1e-6)
     base=f'b{idx}'; out=f'v{idx}'
     filters.append(f'[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{speed}*{pts_scale}[{base}]')
-    # HORIZONTAL ONLY: preserve source composition. No vertical crop, no blurred canvas.
-    # Fit the full source into 1920x1080 and pad only if source AR differs.
+    # HORIZONTAL ONLY. The source is ultrawide (about 64:29), so normal shots fit the full frame
+    # inside 1920x1080. Only the aura shot gets a horizontal punch-in, still 16:9.
     bright=0.055 if role.startswith('stutter_') and idx%2==0 else 0.0
     if role=='aura_farm':
-        # Mild horizontal punch-in while keeping 16:9; no portrait crop.
-        filters.append(f'[{base}]scale=2112:1188:force_original_aspect_ratio=decrease:flags=lanczos,crop=1920:1080:x=(iw-1920)/2:y=(ih-1080)/2,eq=contrast=1.08:saturation=1.12:brightness=0.01,vignette=PI/6,setsar=1,fps=30[{out}]')
+        # Guarantee enough height first, then crop a centered 16:9 window.
+        filters.append(f'[{base}]scale=-2:1080:flags=lanczos,crop=1920:1080:x=(iw-1920)/2:y=0,eq=contrast=1.08:saturation=1.12:brightness=0.01,vignette=PI/6,setsar=1,fps=30[{out}]')
     else:
         filters.append(f'[{base}]scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,eq=contrast=1.06:saturation=1.08:brightness={bright},setsar=1,fps=30[{out}]')
     vlabels.append(f'[{out}]')
@@ -80,6 +80,6 @@ cmd=['ffmpeg','-nostdin','-hide_banner','-y','-i',str(video),'-i',str(music),'-f
 rr=subprocess.run(cmd)
 if rr.returncode!=0 or not output.exists() or output.stat().st_size<1000000:
     raise SystemExit(f'ffmpeg render failed: {rr.returncode}')
-meta={'status':'success','concept':'horizontal_fast_fight_stutter_aura_payoff','duration_sec':round(out_duration,3),'aura_reveal_sec':round(aura_reveal,3),'detected_music_drop_sec':round(drop_sec,3),'audio_start_sec':round(audio_start,3),'drop_alignment_error_sec':round(abs((drop_sec-audio_start)-aura_reveal),3),'layout':'1920x1080 horizontal; source composition preserved; mild 16:9 aura punch-in only','format':'1920x1080 H.264 + AAC','bytes':output.stat().st_size}
+meta={'status':'success','concept':'horizontal_fast_fight_stutter_aura_payoff','duration_sec':round(out_duration,3),'aura_reveal_sec':round(aura_reveal,3),'detected_music_drop_sec':round(drop_sec,3),'audio_start_sec':round(audio_start,3),'drop_alignment_error_sec':round(abs((drop_sec-audio_start)-aura_reveal),3),'layout':'1920x1080 horizontal; full ultrawide source preserved on fight shots; 16:9 aura punch-in only','format':'1920x1080 H.264 + AAC','bytes':output.stat().st_size}
 Path(analysis_path).write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps(meta,ensure_ascii=False))
