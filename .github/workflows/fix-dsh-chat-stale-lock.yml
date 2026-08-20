@@ -1,4 +1,4 @@
-name: Fix DSH Chat Stale Lock
+name: Fix DSH Chat Dispatch Recovery
 
 on:
   push:
@@ -12,38 +12,42 @@ permissions:
   id-token: write
 
 concurrency:
-  group: fix-dsh-chat-stale-lock
+  group: fix-dsh-chat-dispatch-recovery
   cancel-in-progress: true
 
 jobs:
   patch-and-deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Patch stale pending recovery
+      - name: Patch dispatch recovery and visible queue state
         run: |
           python - <<'PY'
           from pathlib import Path
           p=Path('dsh-console/index.html')
           s=p.read_text()
+
           old="""async function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(TOKEN_KEY)||'';render();paintEnc();await syncPublishedEncryption();const p=[...messages].reverse().find(m=>m.pending&&m.clientId);if(p){pendingLocalId=p.id;activeClientId=p.clientId;send.disabled=true;startPoll()}else paintEnc()}"""
-          new="""async function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(TOKEN_KEY)||'';render();paintEnc();await syncPublishedEncryption();const p=[...messages].reverse().find(m=>m.pending&&m.clientId);if(p){const age=now()-(Number(p.ts)||0);if(age>5*60*1000){updateMsg(p.id,{pending:false,text:'Previous turn expired. Send again.',error:true});localStorage.removeItem(PEND+p.clientId);pendingLocalId=null;activeClientId=null;send.disabled=false;paintEnc()}else{pendingLocalId=p.id;activeClientId=p.clientId;send.disabled=true;startPoll()}}else paintEnc()}"""
-          if old not in s: raise SystemExit('load() target not found')
+          new="""async function load(){try{messages=JSON.parse(localStorage.getItem(HIST)||'[]');if(!Array.isArray(messages))messages=[]}catch{messages=[]}token.value=localStorage.getItem(TOKEN_KEY)||'';render();paintEnc();await syncPublishedEncryption();const p=[...messages].reverse().find(m=>m.pending&&m.clientId);if(p){const age=now()-(Number(p.ts)||0);if(age>2*60*1000){updateMsg(p.id,{pending:false,text:'Previous request expired before Runner acknowledged it. Retry once.',error:true});localStorage.removeItem(PEND+p.clientId);pendingLocalId=null;activeClientId=null;send.disabled=false;$('orb').className='orb error';$('state').textContent='Runner 6 · previous request expired'}else{pendingLocalId=p.id;activeClientId=p.clientId;send.disabled=true;updateMsg(p.id,{text:p.text||'Waiting for Runner…'});startPoll()}}else paintEnc()}"""
+          if old not in s: raise SystemExit('load target not found')
           s=s.replace(old,new,1)
 
-          old2="""async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId))return s;paintStatus(s);if(s.status==='started')return s;"""
-          new2="""async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId)){const m=messages.find(x=>x.id===pendingLocalId);if(m&&now()-(Number(m.ts)||0)>5*60*1000)finishError('Request expired before Runner acknowledged it. Send again.');return s}paintStatus(s);if(s.status==='started')return s;"""
-          if old2 not in s: raise SystemExit('refresh() target not found')
-          s=s.replace(old2,new2,1)
+          old="""if(m.pending){const t=document.createElement('span');t.className='typing';t.innerHTML='<i></i><i></i><i></i>';bubble.appendChild(t)}else escText(bubble,m.text);"""
+          new="""if(m.pending){if(m.text)escText(bubble,m.text);else{const t=document.createElement('span');t.className='typing';t.innerHTML='<i></i><i></i><i></i>';bubble.appendChild(t)}}else escText(bubble,m.text);"""
+          if old not in s: raise SystemExit('render target not found')
+          s=s.replace(old,new,1)
 
-          old3="""}catch(e){add('assistant',e.message,{error:true});send.disabled=false;$('orb').className='orb error';if(e.message.includes('Settings')||e.message.includes('encryption'))openSheet()}}"""
-          new3="""}catch(e){if(pendingLocalId)finishError(e.message);else add('assistant',e.message,{error:true});send.disabled=false;$('orb').className='orb error';if(e.message.includes('Settings')||e.message.includes('encryption'))openSheet()}}"""
-          if old3 not in s: raise SystemExit('send catch target not found')
-          s=s.replace(old3,new3,1)
+          old="""async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId))return s;paintStatus(s);if(s.status==='started')return s;"""
+          new="""async function refresh(silent=false){try{const s=await repoJson('dsh-status.json');if(!pendingLocalId||!activeClientId)return s;if(String(s.client_id||'')!==String(activeClientId)){const m=messages.find(x=>x.id===pendingLocalId);const age=m?now()-(Number(m.ts)||0):0;if(m&&age>2*60*1000)finishError('GitHub accepted the request, but Runner did not start within 2 minutes. Retry once.');else if(m&&age>8000)updateMsg(m.id,{text:'GitHub accepted · waiting for a runner…'});return s}paintStatus(s);if(s.status==='started'){updateMsg(pendingLocalId,{text:'Runner started · working…'});return s;}"""
+          if old not in s: raise SystemExit('refresh target not found')
+          s=s.replace(old,new,1)
+
+          old="""async function sendMessage(){const text=input.value;if(!text.trim()||send.disabled)return;try{if(!token.value.trim())throw Error('Add your GitHub key in Settings first.');const synced=await syncPublishedEncryption();if(!synced)throw Error('Encryption key unavailable. Reload this page and try again.');const sec=await encryptTask(text);add('user',text);input.value='';resize();send.disabled=true;const p=add('assistant','',{pending:true,clientId:sec.clientId});pendingLocalId=p.id;activeClientId=sec.clientId;$('orb').className='orb queued';$('state').textContent='Runner 6 · encrypted queue';await api(`/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:REF,inputs:{payload:sec.payload}})},true);startPoll();setTimeout(()=>refresh(false),900)}catch(e){add('assistant',e.message,{error:true});send.disabled=false;$('orb').className='orb error';if(e.message.includes('Settings')||e.message.includes('encryption'))openSheet()}}"""
+          new="""async function sendMessage(){const text=input.value;if(!text.trim()||send.disabled)return;try{if(!token.value.trim())throw Error('Add your GitHub key in Settings first.');$('state').textContent='Runner 6 · checking GitHub access';await api(`/actions/workflows/${WORKFLOW}`,{},true);const synced=await syncPublishedEncryption();if(!synced)throw Error('Encryption key unavailable. Reload this page and try again.');const sec=await encryptTask(text);add('user',text);input.value='';resize();send.disabled=true;const p=add('assistant','Dispatching to GitHub…',{pending:true,clientId:sec.clientId});pendingLocalId=p.id;activeClientId=sec.clientId;$('orb').className='orb queued';$('state').textContent='Runner 6 · dispatching';await api(`/actions/workflows/${WORKFLOW}/dispatches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:REF,inputs:{payload:sec.payload}})},true);updateMsg(p.id,{text:'GitHub accepted · waiting for a runner…'});$('state').textContent='Runner 6 · waiting for runner';startPoll();setTimeout(()=>refresh(false),900)}catch(e){const msg=e?.message||'Dispatch failed';if(pendingLocalId)finishError(msg);else add('assistant',msg,{error:true});send.disabled=false;$('orb').className='orb error';$('state').textContent='Runner 6 · dispatch failed';if(/Settings|encryption|credential|access token|permission|401|403/i.test(msg))openSheet()}}"""
+          if old not in s: raise SystemExit('send target not found')
+          s=s.replace(old,new,1)
+
           p.write_text(s)
           PY
 
@@ -52,8 +56,12 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add dsh-console/index.html
-          git commit -m 'Fix DSH chat stale pending lock [skip ci]'
-          git push
+          if git diff --cached --quiet; then
+            echo 'No source changes needed'
+          else
+            git commit -m 'Fix DSH chat dispatch deadlock [skip ci]'
+            git push
+          fi
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4
