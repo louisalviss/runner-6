@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: runner-6-dsh-anime-phonk
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   discover:
@@ -84,11 +84,7 @@ jobs:
           set -euo pipefail
           python - <<'PY' > "$RUNNER_TEMP/status.json"
           import json, os
-          print(json.dumps({
-            'status':'running',
-            'run_id':os.environ['GITHUB_RUN_ID'],
-            'model':'deepseek/deepseek-v4-pro'
-          },separators=(',',':')))
+          print(json.dumps({'status':'running','run_id':os.environ['GITHUB_RUN_ID'],'model':'deepseek/deepseek-v4-pro'},separators=(',',':')))
           PY
           C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
           F="dsh-anime-phonk-status.json"
@@ -131,13 +127,7 @@ jobs:
           import json, os
           from pathlib import Path
           p=Path('dsh-handoff/anime-phonk-selection.json')
-          data={
-            'status':'success' if os.environ.get('DSH_CODE')=='0' and p.exists() else 'error',
-            'run_id':os.environ['GITHUB_RUN_ID'],
-            'model':'deepseek/deepseek-v4-pro',
-            'dsh_exit_code':os.environ.get('DSH_CODE',''),
-            'agent_seconds':int(os.environ.get('AGENT_SECONDS') or 0),
-          }
+          data={'status':'success' if os.environ.get('DSH_CODE')=='0' and p.exists() else 'error','run_id':os.environ['GITHUB_RUN_ID'],'model':'deepseek/deepseek-v4-pro','dsh_exit_code':os.environ.get('DSH_CODE',''),'agent_seconds':int(os.environ.get('AGENT_SECONDS') or 0)}
           if p.exists():
             try:data['selection']=json.loads(p.read_text())
             except Exception as e:data['selection_error']=str(e)
