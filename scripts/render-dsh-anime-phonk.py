@@ -86,8 +86,8 @@ for idx,(start,end,speed,role) in enumerate(segments):
     vl=f'v{idx}'
     filters.append(
         f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{speed},"
-        "crop='min(iw,ih*9/16)':ih:(iw-min(iw,ih*9/16))/2:0,"
-        "scale=1080:1920:flags=lanczos,fps=30,"
+        "crop=w=ih*9/16:h=ih:x=(iw-ow)/2:y=0,"
+        "scale=1080:1920:flags=lanczos,setsar=1,fps=30,"
         "eq=contrast=1.07:saturation=1.10:brightness=-0.01,unsharp=5:5:0.45:5:5:0["+vl+"]"
     )
     vlabels.append(f'[{vl}]')
