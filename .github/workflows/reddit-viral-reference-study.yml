@@ -1,0 +1,249 @@
+name: DSH Reddit Viral Reference Study
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'reddit-reference-study-trigger.txt'
+      - '.github/workflows/reddit-viral-reference-study.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: runner6-reddit-reference-study
+  cancel-in-progress: true
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DSH_VERSION: '0.1.0-rc.7'
+      PLAYWRIGHT_MCP_VERSION: '0.0.78'
+      MODEL_ID: 'deepseek/deepseek-v4-pro'
+      STATUS_FILE: 'reddit-reference-study-status.json'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Configure OpenRouter model
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+
+      - name: Activate runtime
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: DSH discover viral references
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff/reference-study
+          TASK='Use the Playwright browser and current public web information to research viral video editing patterns for a short documentary about the Reddit user u/SpontaneousH, whose heroin-use timeline was documented through Reddit posts. Find EXACTLY THREE public video references on YouTube and/or TikTok. Reference A must cover SpontaneousH or the exact Reddit heroin saga if a credible video exists. References B and C should be high-performing short-form or tightly edited internet-story / Reddit-investigation / true-story videos whose visual grammar is transferable: screenshots or evidence as A-roll, real footage as B-roll, clean graphics, fast but intelligible cuts, visual effects, and strong first-3-second hook. Prefer concrete visible performance signals such as views/likes and favor breakout performance relative to channel size when visible. At least one of B/C should be a vertical short under 3 minutes if available. Do not choose generic Minecraft/background Reddit narration. Do not choose slideshow-only videos. For TikTok, use public search or TikTok Creative Center where available. Resolve each to a concrete public URL; never invent URLs. Create dsh-handoff/reference-study/selection.json with an array refs of exactly 3 objects: id, platform, title, creator, url, observed_duration, observed_views, observed_likes, format, why_selected, visual_signals_to_study. Also include a short selection_summary. Do not download media inside the DSH turn. Finish with DSH_REDDIT_REFERENCES_SELECTED.'
+          set +e
+          timeout --signal=TERM --kill-after=10s 360s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/dsh-output.txt" || true
+          cat "$RUNNER_TEMP/dsh-error.txt" >&2 || true
+
+      - name: Install media analysis tools
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pil
+          bash scripts/setup-dsh-media-tools.sh
+          command -v ffmpeg
+          command -v ffprobe
+
+      - name: Download references with Runner-6 media worker
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          test '${{ steps.dsh.outputs.exit_code }}' = '0'
+          test -s dsh-handoff/reference-study/selection.json
+          python - <<'PY'
+          import json
+          p='dsh-handoff/reference-study/selection.json'
+          d=json.load(open(p))
+          assert len(d.get('refs',[]))==3,d
+          for r in d['refs']:
+              assert r.get('url','').startswith(('http://','https://')),r
+          PY
+          mkdir -p dsh-handoff/reference-study/downloads
+          python - <<'PY' > "$RUNNER_TEMP/refs.tsv"
+          import json
+          d=json.load(open('dsh-handoff/reference-study/selection.json'))
+          for i,r in enumerate(d['refs']):
+              print(f"{i}\t{r['url']}\t{r.get('title','reference')[:100]}")
+          PY
+          : > dsh-handoff/reference-study/download-map.tsv
+          while IFS=$'\t' read -r idx url title; do
+            rm -f .dsh-download-request.json dsh-handoff/handoff.json
+            bash scripts/dsh-download-media.sh "$url" 720
+            p="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+            test -s "$p"
+            ext="${p##*.}"
+            cp "$p" "dsh-handoff/reference-study/downloads/ref${idx}.${ext}"
+            printf '%s\t%s\t%s\n' "$idx" "dsh-handoff/reference-study/downloads/ref${idx}.${ext}" "$url" >> dsh-handoff/reference-study/download-map.tsv
+          done < "$RUNNER_TEMP/refs.tsv"
+
+      - name: Frame-by-frame structural analysis
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          mkdir -p dsh-handoff/reference-study/analysis
+          python - <<'PY'
+          import json, pathlib, subprocess, math, re, statistics
+          from PIL import Image, ImageDraw, ImageFont
+
+          root=pathlib.Path('dsh-handoff/reference-study')
+          analysis=root/'analysis'; analysis.mkdir(exist_ok=True)
+          mapping=[]
+          for line in (root/'download-map.tsv').read_text().splitlines():
+              idx,path,url=line.split('\t',2); mapping.append((int(idx),pathlib.Path(path),url))
+
+          def probe(p):
+              j=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-show_entries','stream=width,height,r_frame_rate','-of','json',str(p)],text=True))
+              return j
+
+          summary=[]
+          for idx,p,url in mapping:
+              od=analysis/f'ref{idx}'; od.mkdir(exist_ok=True)
+              meta=probe(p); dur=float(meta['format']['duration']); window=min(dur,60.0)
+              # keep a 60s low-res study clip for motion/effects inspection
+              preview=od/'preview.mp4'
+              subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',f'{window:.3f}','-vf','scale=360:-2,fps=30','-an','-c:v','libx264','-preset','veryfast','-crf','24',str(preview)],check=True)
+              # sample every 0.5s for true temporal inspection
+              frames=od/'frames'; frames.mkdir(exist_ok=True)
+              subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',f'{window:.3f}','-vf','fps=2,scale=240:-2',str(frames/'f_%04d.jpg')],check=True)
+              fs=sorted(frames.glob('f_*.jpg'))
+              # contact sheets, 20 frames / sheet = 10 seconds each
+              for si in range(math.ceil(len(fs)/20)):
+                  batch=fs[si*20:(si+1)*20]
+                  if not batch: continue
+                  ims=[Image.open(x).convert('RGB') for x in batch]
+                  tw=max(im.width for im in ims); th=max(im.height for im in ims)
+                  sheet=Image.new('RGB',(tw*5,th*4+46),(15,15,17))
+                  d=ImageDraw.Draw(sheet)
+                  d.text((10,10),f'Ref {idx} | {si*10:02d}-{min(window,(si+1)*10):.0f}s | 0.5s/frame',fill='white')
+                  for j,im in enumerate(ims): sheet.paste(im,((j%5)*tw,46+(j//5)*th))
+                  sheet.save(od/f'sheet_{si:02d}.jpg',quality=88)
+              # shot-cut estimate using ffmpeg scene scores
+              cmd=['ffmpeg','-hide_banner','-i',str(p),'-t',f'{window:.3f}','-vf',"select='gt(scene,0.24)',showinfo",'-an','-f','null','-']
+              cp=subprocess.run(cmd,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+              pts=[]
+              for m in re.finditer(r'pts_time:([0-9.]+)',cp.stderr):
+                  try: pts.append(float(m.group(1)))
+                  except: pass
+              pts=sorted(set(round(x,3) for x in pts if 0<x<window))
+              bounds=[0.0]+pts+[window]
+              lens=[b-a for a,b in zip(bounds,bounds[1:]) if b>a]
+              stats={'index':idx,'source_url':url,'source_duration':dur,'analysis_window':window,'sample_interval_sec':0.5,'sampled_frames':len(fs),'scene_cuts':pts,'cut_count':len(pts),'mean_shot_sec':round(statistics.mean(lens),3) if lens else window,'median_shot_sec':round(statistics.median(lens),3) if lens else window,'min_shot_sec':round(min(lens),3) if lens else window,'max_shot_sec':round(max(lens),3) if lens else window,'preview':str(preview)}
+              (od/'metrics.json').write_text(json.dumps(stats,indent=2),encoding='utf-8')
+              summary.append(stats)
+          (analysis/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          PY
+
+      - name: Publish status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          from pathlib import Path
+          sel=Path('dsh-handoff/reference-study/selection.json')
+          summ=Path('dsh-handoff/reference-study/analysis/summary.json')
+          d={'status':'success' if sel.exists() and summ.exists() else 'error','run_id':os.environ['GITHUB_RUN_ID']}
+          if sel.exists(): d['selection']=json.loads(sel.read_text())
+          if summ.exists(): d['analysis_summary']=json.loads(summ.read_text())
+          print(json.dumps(d,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update Reddit reference study [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update Reddit reference study [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
+      - name: Upload study artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reddit-reference-study-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/reference-study/selection.json
+            workspace/dsh-handoff/reference-study/download-map.tsv
+            workspace/dsh-handoff/reference-study/analysis/
+          retention-days: 2
+          compression-level: 6
+          if-no-files-found: warn
+
+      - name: Validate
+        working-directory: workspace
+        run: |
+          test -s dsh-handoff/reference-study/selection.json
+          test -s dsh-handoff/reference-study/analysis/summary.json
+          python - <<'PY'
+          import json
+          s=json.load(open('dsh-handoff/reference-study/selection.json'))
+          a=json.load(open('dsh-handoff/reference-study/analysis/summary.json'))
+          assert len(s['refs'])==3,s
+          assert len(a)==3,a
+          assert all(x['sampled_frames']>=20 for x in a),a
+          PY
