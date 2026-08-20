@@ -1,0 +1,61 @@
+name: Fetch Eternxlkz SLAY
+on:
+  push:
+    branches: [main]
+    paths:
+      - "fetch-eternxlkz-slay-trigger.txt"
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MUSIC_URL: "https://www.youtube.com/watch?v=qlzcHe_gusE"
+      STATUS_FILE: "fetch-eternxlkz-slay-status.json"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '{"status":"running","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='SLAY fetch running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='SLAY fetch running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+      - name: Install downloader
+        working-directory: workspace
+        run: bash scripts/setup-dsh-media-tools.sh
+      - name: Download official SLAY audio
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "${MUSIC_URL}#dsh-audio" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$P"
+          cp "$P" dsh-handoff/downloads/eternxlkz-slay-official.mp3
+          test "$(stat -c '%s' dsh-handoff/downloads/eternxlkz-slay-official.mp3)" -gt 500000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eternxlkz-slay-${{ github.run_id }}
+          path: workspace/dsh-handoff/downloads/eternxlkz-slay-official.mp3
+          retention-days: 2
+          compression-level: 0
+      - name: Publish final status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRESENT=false; [ -s dsh-handoff/downloads/eternxlkz-slay-official.mp3 ] && PRESENT=true
+          STATUS=error; [ "$PRESENT" = true ] && STATUS=success
+          printf '{"status":"%s","run_id":"%s","artifact_present":%s}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='SLAY fetch final [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='SLAY fetch final [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
