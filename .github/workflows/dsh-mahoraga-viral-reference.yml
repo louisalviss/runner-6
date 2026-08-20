@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   fetch-reference:
@@ -17,6 +17,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - name: Publish running status
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","phase":"setup","run_id":"%s","artifact_present":false,"source":"tiktok-direct"}\n' "$GITHUB_RUN_ID" > dsh-mahoraga-tiktok-direct-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-direct-status.json
+          git commit -m 'TikTok Mahoraga direct running [skip ci]' || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
 
       - name: Install TikTok-capable downloader
         run: |
@@ -40,17 +50,8 @@ jobs:
             local label="$1"
             local api_host="$2"
             echo "=== $label api=$api_host ===" | tee -a reference-out/discovery-attempts.log >&2
-            local args=(
-              --flat-playlist
-              --playlist-end 200
-              --socket-timeout 20
-              --retries 1
-              --impersonate chrome
-              --print '%(id)s\t%(title)s'
-            )
-            if [ -n "$api_host" ]; then
-              args+=(--extractor-args "tiktok:api_hostname=$api_host")
-            fi
+            local args=(--flat-playlist --playlist-end 200 --socket-timeout 20 --retries 1 --impersonate chrome --print '%(id)s\t%(title)s')
+            if [ -n "$api_host" ]; then args+=(--extractor-args "tiktok:api_hostname=$api_host"); fi
             set +e
             "$YTDLP" "${args[@]}" "$PROFILE" > reference-out/profile.tsv 2>>reference-out/discovery-attempts.log
             code=$?
@@ -72,20 +73,18 @@ jobs:
                   score=(3 if 'mahoraga' in low else 0)+(3 if 'the largest' in low else 0)+(1 if 'bigxthaplug' in low else 0)+(1 if 'big raga' in low else 0)
                   if score: rows.append((score,vid,title))
           rows.sort(reverse=True)
-          if not rows or rows[0][0] < 6:
-              raise SystemExit(1)
+          if not rows or rows[0][0] < 6: raise SystemExit(1)
           score,vid,title=rows[0]
           url=f'https://www.tiktok.com/@divine_daniel21/video/{vid}'
           Path('reference-out/target_url.txt').write_text(url+'\n')
           Path('reference-out/target_title.txt').write_text(title+'\n')
-          print(url)
-          print(title)
+          print(url); print(title)
           PY
           }
 
           found=0
           for host in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
-            if discover_one "direct" "$host" && resolve_target; then found=1; break; fi
+            if discover_one direct "$host" && resolve_target; then found=1; break; fi
           done
 
           if [ "$found" -ne 1 ]; then
@@ -96,17 +95,16 @@ jobs:
             set -e
             if [ "$warp_code" -eq 0 ]; then
               for host in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
-                if discover_one "warp" "$host" && resolve_target; then found=1; break; fi
+                if discover_one warp "$host" && resolve_target; then found=1; break; fi
               done
             fi
           fi
 
           if [ "$found" -ne 1 ]; then
-            echo 'Could not resolve the exact post directly from TikTok profile.' >&2
-            tail -n 80 reference-out/discovery-attempts.log >&2 || true
+            echo 'Could not resolve exact post directly from TikTok profile.' >&2
+            tail -n 100 reference-out/discovery-attempts.log >&2 || true
             exit 11
           fi
-
           TARGET="$(cat reference-out/target_url.txt)"
           echo "Resolved exact TikTok: $TARGET"
           echo "target_url=$TARGET" >> "$GITHUB_OUTPUT"
@@ -119,63 +117,39 @@ jobs:
           YTDLP="$HOME/.local/bin/yt-dlp"
           : > reference-out/download-attempts.log
           rm -f dsh-handoff/downloads/* 2>/dev/null || true
-
           download_one() {
-            local label="$1"
-            local api_host="$2"
+            local label="$1"; local api_host="$2"
             echo "=== $label api=$api_host ===" | tee -a reference-out/download-attempts.log >&2
-            local args=(
-              --no-playlist
-              --socket-timeout 20
-              --retries 2
-              --fragment-retries 2
-              --impersonate chrome
-              --restrict-filenames
-              --max-filesize 250M
-              -P dsh-handoff/downloads
-              -o '%(title).100s_[%(id)s].%(ext)s'
-              --print 'after_move:filepath'
-              -f 'best[height<=1080]/best'
-            )
-            if [ -n "$api_host" ]; then
-              args+=(--extractor-args "tiktok:api_hostname=$api_host")
-            fi
+            local args=(--no-playlist --socket-timeout 20 --retries 2 --fragment-retries 2 --impersonate chrome --restrict-filenames --max-filesize 250M -P dsh-handoff/downloads -o '%(title).100s_[%(id)s].%(ext)s' --print 'after_move:filepath' -f 'best[height<=1080]/best')
+            if [ -n "$api_host" ]; then args+=(--extractor-args "tiktok:api_hostname=$api_host"); fi
             set +e
             "$YTDLP" "${args[@]}" "$TARGET_URL" > reference-out/download.out 2>>reference-out/download-attempts.log
             code=$?
             set -e
             echo "$label exit=$code" | tee -a reference-out/download-attempts.log >&2
-            if [ "$code" -eq 0 ]; then
-              f="$(tail -n1 reference-out/download.out)"
-              [ -n "$f" ] && [ -s "$f" ] && return 0
-            fi
+            if [ "$code" -eq 0 ]; then f="$(tail -n1 reference-out/download.out)"; [ -n "$f" ] && [ -s "$f" ] && return 0; fi
             return 1
           }
-
           ok=0
           for host in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
             if download_one direct "$host"; then ok=1; break; fi
           done
-
           if [ "$ok" -ne 1 ]; then
             warp-cli --accept-tos status >/dev/null 2>&1 || bash scripts/setup-cloudflare-warp.sh >>reference-out/download-attempts.log 2>&1 || true
             for host in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
               if download_one warp "$host"; then ok=1; break; fi
             done
           fi
-
           if [ "$ok" -ne 1 ]; then
-            echo 'TikTok direct/WARP failed; rotating public VPN egress while keeping the TikTok URL.' | tee -a reference-out/download-attempts.log >&2
+            echo 'TikTok direct/WARP failed; rotating VPN egress while retaining the exact TikTok URL.' | tee -a reference-out/download-attempts.log >&2
             set +e
             VPN_OUT="$(YTDLP_BIN="$YTDLP" DSH_MEDIA_MODE=video bash scripts/dsh-ytdlp-vpngate.sh "$TARGET_URL" 1080 2>>reference-out/download-attempts.log)"
             vpn_code=$?
             set -e
             if [ "$vpn_code" -eq 0 ] && [ -n "$VPN_OUT" ]; then ok=1; fi
           fi
-
           warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
-          [ "$ok" -eq 1 ] || { tail -n 120 reference-out/download-attempts.log >&2 || true; exit 12; }
-
+          [ "$ok" -eq 1 ] || { tail -n 140 reference-out/download-attempts.log >&2 || true; exit 12; }
           V="$(find dsh-handoff/downloads -maxdepth 1 -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mkv' \) -size +100k | head -n1)"
           test -n "$V"
           cp "$V" reference-out/tiktok-reference.${V##*.}
@@ -197,18 +171,11 @@ jobs:
           files=sorted(Path('reference-out/frames12').glob('*.jpg'))
           per=48; cols=6; cell_w=640
           for sheet_idx in range(math.ceil(len(files)/per)):
-              chunk=files[sheet_idx*per:(sheet_idx+1)*per]
-              thumbs=[]
+              chunk=files[sheet_idx*per:(sheet_idx+1)*per]; thumbs=[]
               for global_i,p in enumerate(chunk,start=sheet_idx*per):
-                  im=Image.open(p).convert('RGB')
-                  h=im.height+28
-                  c=Image.new('RGB',(cell_w,h),'black')
-                  c.paste(im,(0,0))
-                  ImageDraw.Draw(c).text((8,im.height+5),f'{global_i/12:.3f}s',fill='white')
-                  thumbs.append(c)
+                  im=Image.open(p).convert('RGB'); c=Image.new('RGB',(cell_w,im.height+28),'black'); c.paste(im,(0,0)); ImageDraw.Draw(c).text((8,im.height+5),f'{global_i/12:.3f}s',fill='white'); thumbs.append(c)
               if not thumbs: continue
-              cell_h=thumbs[0].height; rows=math.ceil(len(thumbs)/cols)
-              out=Image.new('RGB',(cell_w*cols,cell_h*rows),'black')
+              cell_h=thumbs[0].height; rows=math.ceil(len(thumbs)/cols); out=Image.new('RGB',(cell_w*cols,cell_h*rows),'black')
               for i,im in enumerate(thumbs): out.paste(im,((i%cols)*cell_w,(i//cols)*cell_h))
               out.save(f'reference-out/contact12_{sheet_idx+1:02d}.jpg',quality=90)
           PY
@@ -220,3 +187,23 @@ jobs:
           path: reference-out/
           retention-days: 2
           if-no-files-found: error
+
+      - name: Publish final status
+        if: always()
+        run: |
+          set -euo pipefail
+          STATUS='${{ job.status }}'; PRESENT=false
+          [ "$STATUS" = success ] && PRESENT=true
+          TARGET=''
+          [ -f reference-out/target_url.txt ] && TARGET="$(cat reference-out/target_url.txt)"
+          python3 - "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$TARGET" <<'PY'
+          import json,sys
+          status,run_id,present,target=sys.argv[1:]
+          open('dsh-mahoraga-tiktok-direct-status.json','w').write(json.dumps({'status':status,'phase':'done','run_id':run_id,'artifact_present':present=='true','artifact_name':f'mahoraga-tiktok-direct-{run_id}','source':'tiktok-direct','target_url':target},ensure_ascii=False)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-direct-status.json
+          git commit -m 'Update TikTok Mahoraga direct status [skip ci]' || true
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin HEAD:"$GITHUB_REF_NAME"
