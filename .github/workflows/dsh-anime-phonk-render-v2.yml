@@ -19,8 +19,9 @@ jobs:
     timeout-minutes: 20
     env:
       VIDEO_URL: "https://www.youtube.com/watch?v=lDzXBSxAxKw"
-      MUSIC_URL: "https://www.youtube.com/watch?v=zHm8GFK0m-E"
+      MUSIC_URL: "https://pixabay.com/music/phonk-drift-strong-anime-phonk-511423/"
       STATUS_FILE: "dsh-anime-phonk-render-v2-status.json"
+      OUTPUT_FILE: "dsh-handoff/render/sukuna_mahoraga_phonk_v2.mp4"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,7 +65,7 @@ jobs:
           test -s "$P"
           echo "path=$P" >> "$GITHUB_OUTPUT"
 
-      - name: Download DSH music
+      - name: Download licensed anime phonk
         id: music
         working-directory: workspace
         run: |
@@ -81,7 +82,7 @@ jobs:
           python scripts/render-dsh-anime-phonk.py \
             "${{ steps.video.outputs.path }}" \
             "${{ steps.music.outputs.path }}" \
-            dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4 \
+            "$OUTPUT_FILE" \
             dsh-handoff/render/edit-analysis.json
 
       - name: QA
@@ -89,15 +90,15 @@ jobs:
         run: |
           set -euo pipefail
           ffprobe -v error -show_entries stream=codec_type,width,height,codec_name -show_entries format=duration,size -of json \
-            dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4 > dsh-handoff/render/ffprobe.json
+            "$OUTPUT_FILE" > dsh-handoff/render/ffprobe.json
           python - <<'PY'
           import json
           p=json.load(open('dsh-handoff/render/ffprobe.json'))
           v=next(s for s in p['streams'] if s['codec_type']=='video')
           assert int(v['width'])==1080 and int(v['height'])==1920, v
           d=float(p['format']['duration'])
-          assert 20 <= d <= 26, d
-          assert int(p['format']['size']) > 500000
+          assert 31 <= d <= 36, d
+          assert int(p['format']['size']) > 1000000
           PY
 
       - name: Upload video
@@ -105,7 +106,7 @@ jobs:
         with:
           name: dsh-anime-phonk-render-v2-${{ github.run_id }}
           path: |
-            workspace/dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4
+            workspace/dsh-handoff/render/sukuna_mahoraga_phonk_v2.mp4
             workspace/dsh-handoff/render/edit-analysis.json
             workspace/dsh-handoff/render/ffprobe.json
           retention-days: 2
@@ -122,7 +123,7 @@ jobs:
           python - <<'PY' > "$RUNNER_TEMP/status.json"
           import json,os
           from pathlib import Path
-          v=Path('dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4')
+          v=Path(os.environ['OUTPUT_FILE'])
           a=Path('dsh-handoff/render/edit-analysis.json')
           q=Path('dsh-handoff/render/ffprobe.json')
           d={'status':'success' if v.exists() and v.stat().st_size else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':bool(v.exists() and v.stat().st_size),'video_url':os.environ['VIDEO_URL'],'music_url':os.environ['MUSIC_URL']}
