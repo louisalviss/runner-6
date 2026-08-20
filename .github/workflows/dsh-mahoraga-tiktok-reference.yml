@@ -1,0 +1,75 @@
+name: DSH Mahoraga TikTok reference
+
+on:
+  push:
+    branches:
+      - feature/dsh-tiktok-resolver
+    paths:
+      - 'dsh-mahoraga-tiktok-reference-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media QA tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-pil
+
+      - name: Resolve and download original TikTok reference
+        run: |
+          set -euo pipefail
+          rm -rf reference-out
+          mkdir -p reference-out
+          python3 scripts/dsh-download-tiktok-reference.py \
+            --username divine_daniel21 \
+            --query 'Mahoraga x The Largest' \
+            --out-dir reference-out
+
+      - name: Build frame analysis assets
+        run: |
+          set -euo pipefail
+          V="$(find reference-out -maxdepth 1 -type f -name '*.mp4' | head -n1)"
+          test -n "$V"
+          mkdir -p reference-out/frames
+          ffmpeg -y -v error -i "$V" -vf 'fps=6,scale=640:-2' -q:v 2 reference-out/frames/f_%04d.jpg
+          python3 - <<'PY'
+          from PIL import Image, ImageDraw
+          import glob, math
+          files=glob.glob('reference-out/frames/*.jpg')[:120]
+          thumbs=[]
+          for i,p in enumerate(files):
+              im=Image.open(p).convert('RGB')
+              canvas=Image.new('RGB',(640,400),'black')
+              y=(400-im.height)//2
+              canvas.paste(im,((640-im.width)//2,y))
+              ImageDraw.Draw(canvas).text((8,376),f'{i/6:.3f}s',fill='white')
+              thumbs.append(canvas)
+          cols=3; rows=max(1,math.ceil(len(thumbs)/cols))
+          out=Image.new('RGB',(640*cols,400*rows),'black')
+          for i,im in enumerate(thumbs): out.paste(im,((i%cols)*640,(i//cols)*400))
+          out.save('reference-out/contact_6fps.jpg',quality=90)
+          PY
+
+      - name: Detect hard cuts
+        run: |
+          set -euo pipefail
+          V="$(find reference-out -maxdepth 1 -type f -name '*.mp4' | head -n1)"
+          ffmpeg -hide_banner -i "$V" -filter_complex "select='gt(scene,0.28)',metadata=print:file=reference-out/scene-cuts.txt" -an -f null - 2>/dev/null || true
+
+      - name: Upload direct TikTok reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahoraga-tiktok-reference-${{ github.run_id }}
+          path: reference-out/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
