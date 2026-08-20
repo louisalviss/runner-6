@@ -1,0 +1,2 @@
+2026-08-20T22:00+07:00
+apply: flash-0731-default + /pro escalation + 8k cap + per-turn cost
