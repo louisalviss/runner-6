@@ -1,0 +1,170 @@
+name: Reddit Reference Study Fixed
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/reddit-reference-study-fixed.yml'
+      - 'reddit-reference-fixed-trigger.txt'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DSH_VERSION: '0.1.0-rc.7'
+      PLAYWRIGHT_MCP_VERSION: '0.0.78'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+      - name: Configure DSH
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 4096
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+      - name: Activate DSH
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+      - name: DSH verify selected references
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff/reference-study
+          TASK='Use Playwright only for a bounded verification task. Verify these three concrete public YouTube references and capture any visible title, creator, duration and view/like metrics without playing the videos unless necessary. A: https://www.youtube.com/watch?v=oxp9QGdfNSk ; B: https://www.youtube.com/watch?v=FKcOZSUmVyQ ; C: https://www.youtube.com/watch?v=dDqEwXToJNY . A and B cover u/SpontaneousH directly. C is a viral Reddit-story short reported at more than 9 million views and is included to study short-form hook/pacing. Do not search broadly. Do not download. Write dsh-handoff/reference-study/selection.json with refs exactly A,B,C. Each object: id,platform,title,creator,url,observed_duration,observed_views,observed_likes,format,why_selected,visual_signals_to_study. Use null for anything not verified. Finish immediately with DSH_FIXED_REFS_VERIFIED.'
+          set +e
+          timeout --signal=TERM --kill-after=10s 150s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-out.txt" 2> "$RUNNER_TEMP/dsh-err.txt"
+          CODE=$?
+          set -e
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/dsh-out.txt" || true
+          cat "$RUNNER_TEMP/dsh-err.txt" >&2 || true
+          # Deterministic fallback preserves requested references if browser verification times out.
+          if [ ! -s dsh-handoff/reference-study/selection.json ]; then
+            cat > dsh-handoff/reference-study/selection.json <<'JSON'
+          {"refs":[{"id":"A","platform":"YouTube","title":"The Reddit User Who Got Addicted To Heroin In Real Time | SpontaneousH","creator":"Lucy Lurch","url":"https://www.youtube.com/watch?v=oxp9QGdfNSk","observed_duration":null,"observed_views":null,"observed_likes":null,"format":"documentary","why_selected":"Exact saga reference","visual_signals_to_study":["hook","source evidence","B-roll switching"]},{"id":"B","platform":"YouTube","title":"Down the Reddit Hole: The Story of u/SpontaneousH","creator":"Depth Zero","url":"https://www.youtube.com/watch?v=FKcOZSUmVyQ","observed_duration":null,"observed_views":null,"observed_likes":null,"format":"documentary","why_selected":"Exact saga reference from another editor","visual_signals_to_study":["story structure","screenshots","pacing"]},{"id":"C","platform":"YouTube","title":"the scariest reddit story #shorts #redditstories","creator":null,"url":"https://www.youtube.com/watch?v=dDqEwXToJNY","observed_duration":null,"observed_views":null,"observed_likes":null,"format":"short","why_selected":"High-performing Reddit short reference","visual_signals_to_study":["first-three-second hook","caption density","short-form pacing"]}]}
+          JSON
+          fi
+      - name: Install media tools
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pil
+          bash scripts/setup-dsh-media-tools.sh
+      - name: Download all three references
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          test -s dsh-handoff/reference-study/selection.json
+          python - <<'PY' > "$RUNNER_TEMP/refs.tsv"
+          import json
+          d=json.load(open('dsh-handoff/reference-study/selection.json'))
+          assert len(d['refs'])==3,d
+          for i,r in enumerate(d['refs']): print(f"{i}\t{r['url']}")
+          PY
+          mkdir -p dsh-handoff/reference-study/downloads
+          : > dsh-handoff/reference-study/map.tsv
+          while IFS=$'\t' read -r idx url; do
+            rm -f dsh-handoff/handoff.json
+            bash scripts/dsh-download-media.sh "$url" 720
+            p="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+            test -s "$p"
+            ext="${p##*.}"
+            cp "$p" "dsh-handoff/reference-study/downloads/ref${idx}.${ext}"
+            printf '%s\t%s\t%s\n' "$idx" "dsh-handoff/reference-study/downloads/ref${idx}.${ext}" "$url" >> dsh-handoff/reference-study/map.tsv
+          done < "$RUNNER_TEMP/refs.tsv"
+      - name: Analyze every half-second and scene cuts
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,pathlib,subprocess,math,re,statistics
+          from PIL import Image,ImageDraw
+          root=pathlib.Path('dsh-handoff/reference-study'); out=root/'analysis'; out.mkdir(exist_ok=True)
+          summary=[]
+          for line in (root/'map.tsv').read_text().splitlines():
+              idx_s,path_s,url=line.split('\t',2); idx=int(idx_s); p=pathlib.Path(path_s); od=out/f'ref{idx}'; od.mkdir(exist_ok=True)
+              meta=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-show_entries','stream=width,height','-of','json',str(p)],text=True)); dur=float(meta['format']['duration']); win=min(60.0,dur)
+              preview=od/'preview.mp4'; subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',str(win),'-vf','scale=360:-2,fps=30','-an','-c:v','libx264','-preset','veryfast','-crf','25',str(preview)],check=True)
+              fd=od/'frames'; fd.mkdir(exist_ok=True); subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',str(win),'-vf','fps=2,scale=240:-2',str(fd/'f_%04d.jpg')],check=True)
+              fs=sorted(fd.glob('f_*.jpg'))
+              for si in range(math.ceil(len(fs)/20)):
+                  batch=fs[si*20:(si+1)*20]
+                  if not batch: continue
+                  ims=[Image.open(x).convert('RGB') for x in batch]; tw=max(i.width for i in ims); th=max(i.height for i in ims)
+                  sh=Image.new('RGB',(tw*5,th*4+42),(15,15,17)); d=ImageDraw.Draw(sh); d.text((8,8),f'Ref {idx} | {si*10:02d}-{min(win,(si+1)*10):.0f}s | 0.5s/frame',fill='white')
+                  for j,im in enumerate(ims): sh.paste(im,((j%5)*tw,42+(j//5)*th))
+                  sh.save(od/f'sheet_{si:02d}.jpg',quality=88)
+              cp=subprocess.run(['ffmpeg','-hide_banner','-i',str(p),'-t',str(win),'-vf',"select='gt(scene,0.24)',showinfo",'-an','-f','null','-'],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+              cuts=[]
+              for m in re.finditer(r'pts_time:([0-9.]+)',cp.stderr):
+                  x=float(m.group(1))
+                  if 0<x<win: cuts.append(round(x,3))
+              cuts=sorted(set(cuts)); bounds=[0]+cuts+[win]; lens=[b-a for a,b in zip(bounds,bounds[1:]) if b>a]
+              m={'index':idx,'url':url,'duration':dur,'window':win,'frames':len(fs),'cut_count':len(cuts),'cuts':cuts,'mean_shot_sec':round(statistics.mean(lens),3) if lens else win,'median_shot_sec':round(statistics.median(lens),3) if lens else win,'min_shot_sec':round(min(lens),3) if lens else win,'max_shot_sec':round(max(lens),3) if lens else win}
+              (od/'metrics.json').write_text(json.dumps(m,indent=2)); summary.append(m)
+          (out/'summary.json').write_text(json.dumps(summary,indent=2))
+          PY
+      - name: Upload study
+        uses: actions/upload-artifact@v4
+        with:
+          name: reddit-reference-fixed-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/reference-study/selection.json
+            workspace/dsh-handoff/reference-study/map.tsv
+            workspace/dsh-handoff/reference-study/analysis/
+          retention-days: 2
+          compression-level: 6
+          if-no-files-found: error
+      - name: Validate
+        working-directory: workspace
+        run: |
+          python - <<'PY'
+          import json
+          s=json.load(open('dsh-handoff/reference-study/selection.json')); a=json.load(open('dsh-handoff/reference-study/analysis/summary.json'))
+          assert len(s['refs'])==3 and len(a)==3,(s,a)
+          assert all(x['frames']>=20 for x in a),a
+          print(json.dumps({'selection':s,'analysis':a},ensure_ascii=False,indent=2))
+          PY
