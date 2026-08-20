@@ -1,0 +1,90 @@
+name: Reddit Reference Matrix Analysis
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/reddit-reference-matrix.yml'
+      - 'reddit-reference-matrix-trigger.txt'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  analyze:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - idx: 0
+            url: https://www.youtube.com/watch?v=oxp9QGdfNSk
+            label: lucy-lurch-spontaneoush
+          - idx: 1
+            url: https://www.youtube.com/watch?v=FKcOZSUmVyQ
+            label: depth-zero-spontaneoush
+          - idx: 2
+            url: https://www.youtube.com/watch?v=dDqEwXToJNY
+            label: viral-reddit-short
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - name: Install media analysis tools
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pil
+          bash scripts/setup-dsh-media-tools.sh
+      - name: Fetch reference through Runner-6 media worker
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff
+          bash scripts/dsh-download-media.sh '${{ matrix.url }}' 720
+          p="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$p"
+          mkdir -p "dsh-handoff/reference-${{ matrix.idx }}"
+          cp "$p" "dsh-handoff/reference-${{ matrix.idx }}/source.${p##*.}"
+          cp dsh-handoff/handoff.json "dsh-handoff/reference-${{ matrix.idx }}/handoff.json"
+      - name: Analyze first 60 seconds at 0.5 second resolution
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,pathlib,subprocess,math,re,statistics
+          from PIL import Image,ImageDraw
+          idx='${{ matrix.idx }}'; root=pathlib.Path(f'dsh-handoff/reference-{idx}')
+          p=next(x for x in root.iterdir() if x.name.startswith('source.'))
+          meta=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-show_entries','stream=width,height','-of','json',str(p)],text=True)); dur=float(meta['format']['duration']); win=min(60.0,dur)
+          preview=root/'preview.mp4'; subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',str(win),'-vf','scale=360:-2,fps=30','-an','-c:v','libx264','-preset','veryfast','-crf','25',str(preview)],check=True)
+          fd=root/'frames'; fd.mkdir(exist_ok=True); subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(p),'-t',str(win),'-vf','fps=2,scale=240:-2',str(fd/'f_%04d.jpg')],check=True)
+          fs=sorted(fd.glob('f_*.jpg'))
+          for si in range(math.ceil(len(fs)/20)):
+              batch=fs[si*20:(si+1)*20]
+              if not batch: continue
+              ims=[Image.open(x).convert('RGB') for x in batch]; tw=max(i.width for i in ims); th=max(i.height for i in ims); sh=Image.new('RGB',(tw*5,th*4+42),(15,15,17)); d=ImageDraw.Draw(sh); d.text((8,8),f'Ref {idx} | {si*10:02d}-{min(win,(si+1)*10):.0f}s | 0.5s/frame',fill='white')
+              for k,im in enumerate(ims): sh.paste(im,((k%5)*tw,42+(k//5)*th))
+              sh.save(root/f'sheet_{si:02d}.jpg',quality=88)
+          cp=subprocess.run(['ffmpeg','-hide_banner','-i',str(p),'-t',str(win),'-vf',"select='gt(scene,0.24)',showinfo",'-an','-f','null','-'],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+          cuts=[]
+          for m in re.finditer(r'pts_time:([0-9.]+)',cp.stderr):
+              x=float(m.group(1))
+              if 0<x<win: cuts.append(round(x,3))
+          cuts=sorted(set(cuts)); bounds=[0]+cuts+[win]; lens=[b-a for a,b in zip(bounds,bounds[1:]) if b>a]
+          s={'index':int(idx),'url':'${{ matrix.url }}','label':'${{ matrix.label }}','duration':dur,'analysis_window':win,'sampled_frames':len(fs),'cut_count':len(cuts),'cuts':cuts,'mean_shot_sec':round(statistics.mean(lens),3) if lens else win,'median_shot_sec':round(statistics.median(lens),3) if lens else win,'min_shot_sec':round(min(lens),3) if lens else win,'max_shot_sec':round(max(lens),3) if lens else win}
+          (root/'metrics.json').write_text(json.dumps(s,indent=2))
+          print(json.dumps(s,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reddit-ref-${{ matrix.idx }}-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/reference-${{ matrix.idx }}/handoff.json
+            workspace/dsh-handoff/reference-${{ matrix.idx }}/metrics.json
+            workspace/dsh-handoff/reference-${{ matrix.idx }}/preview.mp4
+            workspace/dsh-handoff/reference-${{ matrix.idx }}/sheet_*.jpg
+          retention-days: 2
+          compression-level: 6
+          if-no-files-found: error
