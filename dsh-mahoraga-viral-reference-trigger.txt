@@ -1,4 +1,5 @@
-2026-08-21T04:44+07:00
+2026-08-21T04:49+07:00
 reference: divine_daniel21 Mahoraga x The Largest
 mirror: https://www.youtube.com/watch?v=EqvJXq81jw8
 purpose: learn reusable editing grammar; do not copy assets/logo/text/timing 1:1
+retry: fixed python3-pil dependency
