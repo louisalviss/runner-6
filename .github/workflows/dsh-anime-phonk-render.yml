@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: runner-6-dsh-anime-phonk-render
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   render:
@@ -25,6 +25,21 @@ jobs:
         with:
           path: workspace
           persist-credentials: false
+
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          print(json.dumps({'status':'running','phase':'setup','run_id':os.environ['GITHUB_RUN_ID'],'video_url':os.environ['VIDEO_URL'],'music_url':os.environ['MUSIC_URL'],'artifact_present':False},separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          F="dsh-anime-phonk-render-status.json"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='DSH anime phonk render running [skip ci]' -f content="$C" ${S:+-f sha="$S"} -f branch=main >/dev/null
 
       - name: Install media tools
         working-directory: workspace
@@ -108,7 +123,7 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: Publish status
+      - name: Publish final status
         if: always()
         working-directory: workspace
         env:
@@ -121,13 +136,7 @@ jobs:
           mp4=Path('dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4')
           analysis=Path('dsh-handoff/render/edit-analysis.json')
           qa=Path('dsh-handoff/render/ffprobe.json')
-          data={
-            'status':'success' if mp4.exists() and mp4.stat().st_size>0 else 'error',
-            'run_id':os.environ['GITHUB_RUN_ID'],
-            'video_url':os.environ['VIDEO_URL'],
-            'music_url':os.environ['MUSIC_URL'],
-            'artifact_present':mp4.exists() and mp4.stat().st_size>0,
-          }
+          data={'status':'success' if mp4.exists() and mp4.stat().st_size>0 else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'video_url':os.environ['VIDEO_URL'],'music_url':os.environ['MUSIC_URL'],'artifact_present':mp4.exists() and mp4.stat().st_size>0}
           if mp4.exists(): data['bytes']=mp4.stat().st_size
           if analysis.exists():
             try:data['edit_analysis']=json.loads(analysis.read_text())
