@@ -26,7 +26,9 @@ jobs:
     env:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
-      DSH_MODEL: "deepseek/deepseek-v4-pro"
+      DSH_MODEL: "deepseek/deepseek-v4-flash-0731"
+      DSH_MODEL_NAME: "DeepSeek V4 Flash 0731"
+      DSH_MAX_TOKENS: "8192"
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
     steps:
@@ -78,6 +80,23 @@ jobs:
             echo 'status=decrypt_error' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Select cost-aware model
+        if: steps.decrypt.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
+          case "$TASK" in
+            /pro|/pro\ *)
+              TASK="${TASK#/pro}"
+              TASK="${TASK# }"
+              printf '%s' "$TASK" > "$RUNNER_TEMP/dsh-task.txt"
+              echo 'DSH_MODEL=deepseek/deepseek-v4-pro' >> "$GITHUB_ENV"
+              echo 'DSH_MODEL_NAME=DeepSeek V4 Pro' >> "$GITHUB_ENV"
+              ;;
+          esac
+          echo 'DSH_MAX_TOKENS=8192' >> "$GITHUB_ENV"
+          unset TASK
+
       - name: Publish safe start status
         if: always()
         env:
@@ -98,27 +117,52 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$DSH_HOME"
-          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          cat > "$DSH_HOME/settings.yaml" <<YAML
           llm-pi-ai:
             providers:
               openrouter-v4:
-                displayName: OpenRouter DeepSeek V4 Pro
+                displayName: OpenRouter DSH Cost-Aware
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
                 baseURL: https://openrouter.ai/api/v1
                 compat:
                   thinkingFormat: openrouter
                 models:
-                  - id: deepseek/deepseek-v4-pro
-                    name: DeepSeek V4 Pro
-                    contextWindow: 1000000
-                    maxTokens: 16384
+                  - id: "${DSH_MODEL}"
+                    name: "${DSH_MODEL_NAME}"
+                    contextWindow: 1048576
+                    maxTokens: ${DSH_MAX_TOKENS}
                     input: [text]
           agent-default-model:
             provider: openrouter-v4
-            model: deepseek/deepseek-v4-pro
+            model: "${DSH_MODEL}"
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Snapshot OpenRouter usage before
+        if: steps.decrypt.outputs.ready == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/or-usage-before.txt"
+          [ -z "${OPENROUTER_API_KEY:-}" ] && exit 0
+          curl --connect-timeout 8 --max-time 15 -fsS \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/or-key-before.json" || exit 0
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          try:
+              d=json.loads((Path(os.environ['RUNNER_TEMP'])/'or-key-before.json').read_text()).get('data',{})
+              v=d.get('usage')
+              if isinstance(v,(int,float)):
+                  (Path(os.environ['RUNNER_TEMP'])/'or-usage-before.txt').write_text(str(v))
+          except Exception:
+              pass
+          PY
+          rm -f "$RUNNER_TEMP/or-key-before.json"
+          unset OPENROUTER_API_KEY
 
       - name: Restore verified DSH runtime
         if: steps.decrypt.outputs.ready == 'true'
@@ -169,6 +213,37 @@ jobs:
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
           unset TASK OPENROUTER_API_KEY
+
+      - name: Measure OpenRouter turn cost
+        id: turn_cost
+        if: steps.decrypt.outputs.ready == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo 'cost_usd=' >> "$GITHUB_OUTPUT"
+          [ -z "${OPENROUTER_API_KEY:-}" ] && exit 0
+          sleep 1
+          curl --connect-timeout 8 --max-time 15 -fsS \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/or-key-after.json" || exit 0
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          t=Path(os.environ['RUNNER_TEMP'])
+          try:
+              before=float((t/'or-usage-before.txt').read_text().strip())
+              after=json.loads((t/'or-key-after.json').read_text()).get('data',{}).get('usage')
+              if not isinstance(after,(int,float)):
+                  raise ValueError('missing usage')
+              cost=max(0.0,float(after)-before)
+              with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+                  f.write(f'cost_usd={cost:.9f}\n')
+          except Exception:
+              pass
+          PY
+          rm -f "$RUNNER_TEMP/or-key-after.json" "$RUNNER_TEMP/or-usage-before.txt"
+          unset OPENROUTER_API_KEY
 
       - name: Execute queued media download
         id: download
@@ -243,6 +318,7 @@ jobs:
           DOWNLOAD_EXIT_CODE: ${{ steps.download.outputs.exit_code }}
           MEDIA_PRESENT: ${{ steps.media.outputs.present }}
           MEDIA_COUNT: ${{ steps.media.outputs.count }}
+          TURN_COST_USD: ${{ steps.turn_cost.outputs.cost_usd }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -301,6 +377,9 @@ jobs:
             'client_id':(t/'client-id.txt').read_text().strip(),
             'browser':'playwright-mcp',
             'runtime':'cached-dsh',
+            'model':os.environ.get('DSH_MODEL'),
+            'cost_usd':float(os.environ['TURN_COST_USD']) if os.environ.get('TURN_COST_USD','').strip() else None,
+            'cost_source':'openrouter_key_usage_delta',
             'download_requested':requested,
             'download_status':dlstatus,
             'download_exit_code':int(os.environ.get('DOWNLOAD_EXIT_CODE') or 0),
