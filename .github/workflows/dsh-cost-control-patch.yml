@@ -1,0 +1,260 @@
+name: Apply DSH Cost Control
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-cost-control-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch production DSH and console
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if new in text:
+                  return text
+              if old not in text:
+                  raise SystemExit(f'missing anchor: {label}')
+              return text.replace(old, new, 1)
+
+          wf = Path('.github/workflows/dsh-secure.yml')
+          s = wf.read_text()
+
+          s = replace_once(
+              s,
+              '      DSH_PROVIDER: "openrouter-v4"\n      DSH_MODEL: "deepseek/deepseek-v4-pro"\n      PLAYWRIGHT_MCP_VERSION: "0.0.78"',
+              '      DSH_PROVIDER: "openrouter-v4"\n      DSH_MODEL: "deepseek/deepseek-v4-flash-0731"\n      DSH_MODEL_NAME: "DeepSeek V4 Flash 0731"\n      DSH_MAX_TOKENS: "8192"\n      PLAYWRIGHT_MCP_VERSION: "0.0.78"',
+              'default model env')
+
+          select_step = '''      - name: Select cost-aware model
+            if: steps.decrypt.outputs.ready == 'true'
+            run: |
+              set -euo pipefail
+              TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
+              case "$TASK" in
+                /pro|/pro\\ *)
+                  TASK="${TASK#/pro}"
+                  TASK="${TASK# }"
+                  printf '%s' "$TASK" > "$RUNNER_TEMP/dsh-task.txt"
+                  echo 'DSH_MODEL=deepseek/deepseek-v4-pro' >> "$GITHUB_ENV"
+                  echo 'DSH_MODEL_NAME=DeepSeek V4 Pro' >> "$GITHUB_ENV"
+                  ;;
+              esac
+              echo 'DSH_MAX_TOKENS=8192' >> "$GITHUB_ENV"
+              unset TASK
+
+'''
+          if '      - name: Select cost-aware model\n' not in s:
+              anchor = '      - name: Publish safe start status\n'
+              if anchor not in s:
+                  raise SystemExit('missing anchor: publish safe start')
+              s = s.replace(anchor, select_step + anchor, 1)
+
+          old_cfg = '''          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 16384
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML'''
+          new_cfg = '''          cat > "$DSH_HOME/settings.yaml" <<YAML
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DSH Cost-Aware
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: "${DSH_MODEL}"
+                    name: "${DSH_MODEL_NAME}"
+                    contextWindow: 1048576
+                    maxTokens: ${DSH_MAX_TOKENS}
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: "${DSH_MODEL}"
+          YAML'''
+          s = replace_once(s, old_cfg, new_cfg, 'dynamic OpenRouter config')
+
+          before_step = '''      - name: Snapshot OpenRouter usage before
+            if: steps.decrypt.outputs.ready == 'true'
+            env:
+              OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+            run: |
+              set -euo pipefail
+              : > "$RUNNER_TEMP/or-usage-before.txt"
+              [ -z "${OPENROUTER_API_KEY:-}" ] && exit 0
+              curl --connect-timeout 8 --max-time 15 -fsS \\
+                -H "Authorization: Bearer $OPENROUTER_API_KEY" \\
+                https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/or-key-before.json" || exit 0
+              python - <<'PY2'
+              import json, os
+              from pathlib import Path
+              try:
+                  d=json.loads((Path(os.environ['RUNNER_TEMP'])/'or-key-before.json').read_text()).get('data',{})
+                  v=d.get('usage')
+                  if isinstance(v,(int,float)):
+                      (Path(os.environ['RUNNER_TEMP'])/'or-usage-before.txt').write_text(str(v))
+              except Exception:
+                  pass
+              PY2
+              rm -f "$RUNNER_TEMP/or-key-before.json"
+              unset OPENROUTER_API_KEY
+
+'''
+          if '      - name: Snapshot OpenRouter usage before\n' not in s:
+              anchor = '      - name: Restore verified DSH runtime\n'
+              if anchor not in s:
+                  raise SystemExit('missing anchor: restore runtime')
+              s = s.replace(anchor, before_step + anchor, 1)
+
+          after_step = '''      - name: Measure OpenRouter turn cost
+            id: turn_cost
+            if: steps.decrypt.outputs.ready == 'true'
+            env:
+              OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+            run: |
+              set -euo pipefail
+              echo 'cost_usd=' >> "$GITHUB_OUTPUT"
+              [ -z "${OPENROUTER_API_KEY:-}" ] && exit 0
+              curl --connect-timeout 8 --max-time 15 -fsS \\
+                -H "Authorization: Bearer $OPENROUTER_API_KEY" \\
+                https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/or-key-after.json" || exit 0
+              python - <<'PY2'
+              import json, os
+              from pathlib import Path
+              t=Path(os.environ['RUNNER_TEMP'])
+              try:
+                  before=float((t/'or-usage-before.txt').read_text().strip())
+                  after=json.loads((t/'or-key-after.json').read_text()).get('data',{}).get('usage')
+                  if not isinstance(after,(int,float)):
+                      raise ValueError('missing usage')
+                  cost=max(0.0,float(after)-before)
+                  with open(os.environ['GITHUB_OUTPUT'],'a') as f:
+                      f.write(f'cost_usd={cost:.9f}\\n')
+              except Exception:
+                  pass
+              PY2
+              rm -f "$RUNNER_TEMP/or-key-after.json" "$RUNNER_TEMP/or-usage-before.txt"
+              unset OPENROUTER_API_KEY
+
+'''
+          if '      - name: Measure OpenRouter turn cost\n' not in s:
+              anchor = '      - name: Execute queued media download\n'
+              if anchor not in s:
+                  raise SystemExit('missing anchor: media download')
+              s = s.replace(anchor, after_step + anchor, 1)
+
+          s = replace_once(
+              s,
+              '          MEDIA_COUNT: ${{ steps.media.outputs.count }}',
+              '          MEDIA_COUNT: ${{ steps.media.outputs.count }}\n          TURN_COST_USD: ${{ steps.turn_cost.outputs.cost_usd }}',
+              'turn cost env')
+
+          s = replace_once(
+              s,
+              "            'runtime':'cached-dsh',\n            'download_requested':requested,",
+              "            'runtime':'cached-dsh',\n            'model':os.environ.get('DSH_MODEL'),\n            'cost_usd':float(os.environ['TURN_COST_USD']) if os.environ.get('TURN_COST_USD','').strip() else None,\n            'cost_source':'openrouter_key_usage_delta',\n            'download_requested':requested,",
+              'encrypted result cost fields')
+
+          wf.write_text(s)
+
+          ui = Path('dsh-console/index.html')
+          h = ui.read_text()
+          h = replace_once(
+              h,
+              '<div class="hint"><span class="secure">Encrypted</span> · public Runner 6 · DeepSeek V4 Pro</div>',
+              '<div class="hint"><span class="secure">Encrypted</span> · public Runner 6 · DeepSeek V4 Flash 0731 · /pro = Pro</div>',
+              'composer model hint')
+          h = replace_once(
+              h,
+              '<div class="label">OpenRouter</div>\n    <div class="balancegrid">',
+              '<div class="label">OpenRouter</div>\n    <div class="small">Default: DeepSeek V4 Flash 0731 · max output 8K. Start a message with <b>/pro</b> to use V4 Pro for that turn.</div>\n    <div class="balancegrid">',
+              'settings model note')
+          h = replace_once(
+              h,
+              "if(m.role==='assistant'&&(m.runId||m.error)){",
+              "if(m.role==='assistant'&&(m.runId||m.error||m.model||typeof m.costUsd==='number')){",
+              'assistant meta condition')
+          h = replace_once(
+              h,
+              "if(m.error){const s=document.createElement('span');s.textContent='Error';meta.appendChild(s)}turn.appendChild(meta)}",
+              "if(m.model){const s=document.createElement('span');s.textContent=m.model.includes('v4-pro')?'V4 Pro':m.model.includes('v4-flash')?'V4 Flash':m.model;meta.appendChild(s)}if(typeof m.costUsd==='number'&&Number.isFinite(m.costUsd)){const s=document.createElement('span');s.textContent='Cost '+money(m.costUsd);meta.appendChild(s)}if(m.error){const s=document.createElement('span');s.textContent='Error';meta.appendChild(s)}turn.appendChild(meta)}",
+              'assistant model cost meta')
+          h = replace_once(
+              h,
+              "updateMsg(pendingLocalId,{pending:false,text,runId:String(r.run_id||s.run_id),error:r.status!=='success'});",
+              "const cost=(typeof r.cost_usd==='number'&&Number.isFinite(r.cost_usd))?r.cost_usd:undefined;updateMsg(pendingLocalId,{pending:false,text,runId:String(r.run_id||s.run_id),model:r.model||s.model||'',costUsd:cost,error:r.status!=='success'});",
+              'result model cost binding')
+          ui.write_text(h)
+          PY
+
+      - name: Validate patch
+        run: |
+          set -euo pipefail
+          grep -q 'deepseek/deepseek-v4-flash-0731' .github/workflows/dsh-secure.yml
+          grep -q 'maxTokens: ${DSH_MAX_TOKENS}' .github/workflows/dsh-secure.yml
+          grep -q 'Measure OpenRouter turn cost' .github/workflows/dsh-secure.yml
+          grep -q '/pro = Pro' dsh-console/index.html
+          grep -q 'costUsd' dsh-console/index.html
+
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/dsh-secure.yml dsh-console/index.html
+          if git diff --cached --quiet; then
+            echo 'No changes needed'
+            exit 0
+          fi
+          git commit -m 'Cut DSH inference cost and expose turn cost [skip ci]'
+          git push origin HEAD:main
+
+      - name: Publish marker
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STATUS=success
+          git diff --quiet || STATUS=error
+          printf '{"status":"%s","run_id":"%s","commit":"%s"}\n' "$STATUS" "$GITHUB_RUN_ID" "$(git rev-parse HEAD)" > "$RUNNER_TEMP/dsh-cost-control-status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/dsh-cost-control-status.json")"
+          F=dsh-cost-control-status.json
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH cost control status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH cost control status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
