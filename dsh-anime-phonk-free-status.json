@@ -1,1 +1,1 @@
-{"status":"running","run_id":"32316751985","model":"nvidia/nemotron-3-ultra-550b-a55b:free"}
+{"status":"error","run_id":"32316751985","model":"nvidia/nemotron-3-ultra-550b-a55b:free","dsh_exit_code":"124","agent_seconds":300}
