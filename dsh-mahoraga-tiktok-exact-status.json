@@ -1,1 +1,1 @@
-{"status":"running","run_id":"32380622688","url":"https://www.tiktok.com/@divine_daniel21/video/7553165513183022353","artifact_present":false}
+{"status":"success","run_id":"32380622688","url":"https://www.tiktok.com/@divine_daniel21/video/7553165513183022353","artifact_present":true,"route":"direct","bytes":2189931,"ffprobe":{"programs":[],"streams":[{"codec_name":"aac","duration":"30.335986"},{"codec_name":"hevc","width":1280,"height":720,"duration":"30.333333"}],"format":{"duration":"30.335986","size":"2189931"}}}
