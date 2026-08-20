@@ -1,6 +1,6 @@
-2026-08-20T16:03+07:00
+2026-08-20T16:07+07:00
 concept: fast-fight > stutter > aura-farm > payoff
-layout: iphone-safe near-full-width fight + full-frame reference strip
+layout: iphone-safe ultrawide-aware fight + exact full-frame reference strip
 music: Yara Yara aura sound
 source: Sukuna vs Mahoraga
-nonce: v5-safe-2
+nonce: v5-safe-3
