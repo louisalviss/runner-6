@@ -1,0 +1,141 @@
+name: DSH Anime Phonk Render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-anime-phonk-render-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-anime-phonk-render
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VIDEO_URL: "https://www.youtube.com/watch?v=lDzXBSxAxKw"
+      MUSIC_URL: "https://www.youtube.com/watch?v=zHm8GFK0m-E"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - name: Install media tools
+        working-directory: workspace
+        run: bash scripts/setup-dsh-media-tools.sh
+
+      - name: Download DSH-selected scene source
+        id: video
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff/downloads dsh-handoff/render
+          bash scripts/dsh-download-media.sh "$VIDEO_URL" 720
+          P="$(python - <<'PY'
+          import json
+          print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])
+          PY
+          )"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+          test -s "$P"
+
+      - name: Download DSH-selected phonk source
+        id: music
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          bash scripts/dsh-download-media.sh "${MUSIC_URL}#dsh-audio" 720
+          P="$(python - <<'PY'
+          import json
+          print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])
+          PY
+          )"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+          test -s "$P"
+
+      - name: Split analyze and render vertical edit
+        id: edit
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python scripts/render-dsh-anime-phonk.py \
+            "${{ steps.video.outputs.path }}" \
+            "${{ steps.music.outputs.path }}" \
+            dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4 \
+            dsh-handoff/render/edit-analysis.json
+          test -s dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4
+          test -s dsh-handoff/render/edit-analysis.json
+
+      - name: QA final video
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          ffprobe -v error -show_entries stream=codec_type,width,height,codec_name -show_entries format=duration,size \
+            -of json dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4 > dsh-handoff/render/ffprobe.json
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/render/ffprobe.json'))
+          v=next(x for x in p['streams'] if x['codec_type']=='video')
+          assert int(v['width']) == 1080 and int(v['height']) == 1920, v
+          d=float(p['format']['duration'])
+          assert 20 <= d <= 26, d
+          assert int(p['format']['size']) > 500000, p['format']
+          print(json.dumps(p,ensure_ascii=False))
+          PY
+
+      - name: Upload rendered video
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-anime-phonk-render-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4
+            workspace/dsh-handoff/render/edit-analysis.json
+            workspace/dsh-handoff/render/ffprobe.json
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          from pathlib import Path
+          mp4=Path('dsh-handoff/render/sukuna_mahoraga_phonk_v1.mp4')
+          analysis=Path('dsh-handoff/render/edit-analysis.json')
+          qa=Path('dsh-handoff/render/ffprobe.json')
+          data={
+            'status':'success' if mp4.exists() and mp4.stat().st_size>0 else 'error',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'video_url':os.environ['VIDEO_URL'],
+            'music_url':os.environ['MUSIC_URL'],
+            'artifact_present':mp4.exists() and mp4.stat().st_size>0,
+          }
+          if mp4.exists(): data['bytes']=mp4.stat().st_size
+          if analysis.exists():
+            try:data['edit_analysis']=json.loads(analysis.read_text())
+            except Exception:pass
+          if qa.exists():
+            try:data['ffprobe']=json.loads(qa.read_text())
+            except Exception:pass
+          print(json.dumps(data,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          F="dsh-anime-phonk-render-status.json"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH anime phonk render status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH anime phonk render status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
