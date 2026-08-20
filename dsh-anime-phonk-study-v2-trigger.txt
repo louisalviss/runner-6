@@ -1,0 +1,2 @@
+2026-08-21T06:23+07:00
+Retry architecture: split DSH into bounded reference research, new combat source selection, and licensed phonk selection. Download/analyze 3 refs before rendering.
