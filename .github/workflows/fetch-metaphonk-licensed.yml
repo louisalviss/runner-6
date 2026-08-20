@@ -1,0 +1,41 @@
+name: Fetch Licensed Metaphonk
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "fetch-metaphonk-trigger.txt"
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MUSIC_URL: "https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-metaphonk.mp3"
+      LICENSE_PAGE: "https://www.free-stock-music.com/alex-productions-metaphonk.html"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download licensed MP3
+        run: |
+          set -euo pipefail
+          mkdir -p licensed-audio
+          curl --fail --location --retry 2 --retry-all-errors \
+            --connect-timeout 20 --max-time 120 \
+            -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36' \
+            -e "$LICENSE_PAGE" "$MUSIC_URL" -o licensed-audio/metaphonk.mp3
+          test "$(stat -c '%s' licensed-audio/metaphonk.mp3)" -gt 500000
+          cat > licensed-audio/MUSIC_CREDIT.txt <<'EOF'
+          Metaphonk by Alex-Productions | https://onsound.eu/
+          Royalty Free Music by https://www.free-stock-music.com
+          Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
+          https://creativecommons.org/licenses/by/3.0/deed.en_US
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licensed-metaphonk-${{ github.run_id }}
+          path: licensed-audio/
+          retention-days: 2
+          compression-level: 0
