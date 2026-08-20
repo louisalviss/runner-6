@@ -2,7 +2,6 @@
 import array
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,18 +16,19 @@ for p in (video, music):
 output.parent.mkdir(parents=True, exist_ok=True)
 Path(analysis_path).parent.mkdir(parents=True, exist_ok=True)
 
-# V4/DSH scene analysis: Sukuna vs Mahoraga reference clip. Keep one payoff,
-# but compress the fight into beat blocks instead of a random montage.
+# V2 editorial plan: preserve spatial readability and let the fight breathe.
+# The source stays fully visible in a 16:9 foreground card on a blurred 9:16 fill.
 segments = [
     # start, end, speed, role
-    (34.5, 37.5, 0.88, 'hook_hand_seal'),
-    (68.0, 74.0, 1.15, 'buildup_pressure'),
-    (112.0, 117.0, 1.25, 'clash_acceleration'),
-    (168.0, 173.0, 0.88, 'fuga_ignition'),
-    (173.0, 179.0, 1.15, 'explosion_payoff'),
+    (34.5, 39.0, 0.98, 'hook_readable_open'),
+    (68.0, 75.0, 1.08, 'pursuit_buildup'),
+    (92.0, 98.0, 1.08, 'midfight_escalation'),
+    (112.0, 118.0, 1.10, 'clash_acceleration'),
+    (168.0, 173.5, 0.92, 'fuga_ignition'),
+    (173.5, 179.0, 1.08, 'explosion_payoff'),
 ]
 
-# Probe whether source has an audio stream for low-level SFX retention.
+
 def has_audio(path: Path) -> bool:
     r = subprocess.run([
         'ffprobe','-v','error','-select_streams','a:0','-show_entries','stream=index',
@@ -36,11 +36,11 @@ def has_audio(path: Path) -> bool:
     ], capture_output=True, text=True)
     return r.returncode == 0 and bool(r.stdout.strip())
 
+
 source_has_audio = has_audio(video)
 
-# Detect a likely musical drop from short-time RMS rise. No external Python deps.
-# Decode first 75s to mono float32 at 8kHz.
-probe_seconds = 75
+# Find the strongest energy rise in the first 90 seconds of the soundtrack.
+probe_seconds = 90
 r = subprocess.run([
     'ffmpeg','-nostdin','-v','error','-i',str(music),'-t',str(probe_seconds),
     '-ac','1','-ar','8000','-f','f32le','-'
@@ -54,87 +54,98 @@ win = int(sr * 0.10)
 rms = []
 for i in range(0, len(vals)-win+1, win):
     chunk = vals[i:i+win]
-    e = math.sqrt(sum(float(x)*float(x) for x in chunk)/max(1,len(chunk)))
+    e = math.sqrt(sum(float(x)*float(x) for x in chunk) / max(1, len(chunk)))
     rms.append(math.log10(e + 1e-7))
-# Smooth ~0.5s then maximize future-vs-past level rise between 5s and 55s.
 sm = []
 for i in range(len(rms)):
-    lo=max(0,i-2); hi=min(len(rms),i+3)
-    sm.append(sum(rms[lo:hi])/(hi-lo))
-best_i = int(12.6/0.10)
+    lo = max(0, i-2)
+    hi = min(len(rms), i+3)
+    sm.append(sum(rms[lo:hi]) / (hi-lo))
+best_i = int(18.0/0.10)
 best_score = -999
-for i in range(int(5/0.10), min(len(sm)-8, int(55/0.10))):
-    pre = sum(sm[max(0,i-8):i])/max(1,len(sm[max(0,i-8):i]))
-    post = sum(sm[i:min(len(sm),i+8)])/max(1,len(sm[i:min(len(sm),i+8)]))
-    score = post-pre
+for i in range(int(6/0.10), min(len(sm)-10, int(70/0.10))):
+    pre_slice = sm[max(0, i-10):i]
+    post_slice = sm[i:min(len(sm), i+10)]
+    pre = sum(pre_slice) / max(1, len(pre_slice))
+    post = sum(post_slice) / max(1, len(post_slice))
+    score = post - pre
     if score > best_score:
-        best_score=score; best_i=i
+        best_score = score
+        best_i = i
 drop_sec = best_i * 0.10
 
 block_durations = [(b-a)/speed for a,b,speed,_ in segments]
 out_duration = sum(block_durations)
-# Fuga starts at block 4. Align detected musical drop there.
-fuga_edit_sec = sum(block_durations[:3])
+fuga_edit_sec = sum(block_durations[:4])
 audio_start = max(0.0, drop_sec - fuga_edit_sec)
 
-# Source 16:9 -> center action crop 9:16. This is intentionally aggressive for TikTok.
-# Hard cuts are used; 50ms flash frames emphasize each transition.
-filters=[]
-vlabels=[]
-alabels=[]
-for idx,(start,end,speed,role) in enumerate(segments):
-    vl=f'v{idx}'
+filters = []
+vlabels = []
+alabels = []
+for idx, (start, end, speed, role) in enumerate(segments):
+    base = f'b{idx}'
+    bg = f'bg{idx}'
+    fg = f'fg{idx}'
+    vl = f'v{idx}'
     filters.append(
-        f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{speed},"
-        "crop=w=ih*9/16:h=ih:x=(iw-ow)/2:y=0,"
-        "scale=1080:1920:flags=lanczos,setsar=1,fps=30,"
-        "eq=contrast=1.07:saturation=1.10:brightness=-0.01,unsharp=5:5:0.45:5:5:0["+vl+"]"
+        f"[0:v]trim=start={start}:end={end},setpts=(PTS-STARTPTS)/{speed},split=2[{base}a][{base}b]"
+    )
+    filters.append(
+        f"[{base}a]scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop=1080:1920,gblur=sigma=30:steps=2,eq=brightness=-0.24:saturation=0.82[{bg}]"
+    )
+    filters.append(
+        f"[{base}b]scale=1080:-2:flags=lanczos,eq=contrast=1.04:saturation=1.06:brightness=-0.01[{fg}]"
+    )
+    filters.append(
+        f"[{bg}][{fg}]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,setsar=1,fps=30[{vl}]"
     )
     vlabels.append(f'[{vl}]')
     if source_has_audio:
-        al=f's{idx}'
+        al = f's{idx}'
         filters.append(
             f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,atempo={speed}[{al}]"
         )
         alabels.append(f'[{al}]')
-filters.append(''.join(vlabels)+f'concat=n={len(segments)}:v=1:a=0[vcat]')
-if source_has_audio:
-    filters.append(''.join(alabels)+f'concat=n={len(segments)}:v=0:a=1[sfxcat]')
 
-# Flash at every cut plus quick fade at head/tail.
-cut_times=[]
-acc=0.0
+filters.append(''.join(vlabels) + f'concat=n={len(segments)}:v=1:a=0[vcat]')
+if source_has_audio:
+    filters.append(''.join(alabels) + f'concat=n={len(segments)}:v=0:a=1[sfxcat]')
+
+cut_times = []
+acc = 0.0
 for d in block_durations[:-1]:
     acc += d
     cut_times.append(acc)
-enable='+'.join([f'between(t,{x:.3f},{x+0.055:.3f})' for x in cut_times]) or '0'
+enable = '+'.join([f'between(t,{x:.3f},{x+0.040:.3f})' for x in cut_times]) or '0'
 filters.append(
-    f"[vcat]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.58:t=fill:enable='{enable}',"
-    f"fade=t=in:st=0:d=0.10,fade=t=out:st={max(0,out_duration-0.35):.3f}:d=0.35[vout]"
+    f"[vcat]drawbox=x=0:y=0:w=iw:h=ih:color=white@0.22:t=fill:enable='{enable}',"
+    f"fade=t=in:st=0:d=0.12,fade=t=out:st={max(0, out_duration-0.40):.3f}:d=0.40[vout]"
 )
 filters.append(
     f"[1:a]atrim=start={audio_start:.3f}:duration={out_duration:.3f},asetpts=PTS-STARTPTS,"
-    "volume=0.96,loudnorm=I=-12:TP=-1.2:LRA=7[music]"
+    "volume=0.92,loudnorm=I=-13:TP=-1.2:LRA=7[music]"
 )
 if source_has_audio:
-    filters.append('[sfxcat]volume=0.27,highpass=f=90[sfx]')
-    filters.append('[music][sfx]amix=inputs=2:duration=shortest:dropout_transition=0,alimiter=limit=0.95[aout]')
+    filters.append('[sfxcat]volume=0.38,highpass=f=80[sfx]')
+    filters.append('[music][sfx]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]')
 else:
     filters.append('[music]alimiter=limit=0.95[aout]')
 
-cmd=[
+cmd = [
     'ffmpeg','-nostdin','-hide_banner','-y','-i',str(video),'-i',str(music),
     '-filter_complex',';'.join(filters),'-map','[vout]','-map','[aout]',
     '-c:v','libx264','-preset','medium','-crf','19','-pix_fmt','yuv420p',
-    '-c:a','aac','-b:a','192k','-movflags','+faststart','-shortest',str(output)
+    '-c:a','aac','-b:a','192k','-movflags','+faststart','-t',f'{out_duration:.3f}',str(output)
 ]
 print('Rendering', output)
-rr=subprocess.run(cmd)
+rr = subprocess.run(cmd)
 if rr.returncode != 0 or not output.exists() or output.stat().st_size == 0:
     raise SystemExit(f'ffmpeg render failed: {rr.returncode}')
 
-meta={
+meta = {
     'status':'success',
+    'layout':'full_16_9_foreground_on_blurred_9_16_canvas',
     'video_source_file':str(video),
     'music_source_file':str(music),
     'source_has_audio':source_has_audio,
@@ -149,5 +160,5 @@ meta={
     'output':str(output),
     'bytes':output.stat().st_size,
 }
-Path(analysis_path).write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
-print(json.dumps(meta,ensure_ascii=False))
+Path(analysis_path).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+print(json.dumps(meta, ensure_ascii=False))
