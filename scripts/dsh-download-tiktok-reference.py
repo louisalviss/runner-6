@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import html
 import json
-import os
 import re
 import subprocess
-import sys
 import time
 import urllib.parse
 import urllib.request
@@ -12,16 +11,29 @@ from pathlib import Path
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15"
 TIKWM = "https://tikwm.com/api"
+WORKER = "https://tdownv4.sl-bjs.workers.dev/"
 
 
-def http_json(url, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json,text/plain,*/*"})
+def http_bytes(url, timeout=35, referer=None):
+    headers={"User-Agent": UA, "Accept": "application/json,text/plain,text/html,*/*"}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", errors="replace"))
+        return r.read()
+
+
+def http_json(url, timeout=35):
+    return json.loads(http_bytes(url, timeout=timeout).decode("utf-8", errors="replace"))
+
+
+def http_text(url, timeout=35):
+    return http_bytes(url, timeout=timeout).decode("utf-8", errors="replace")
 
 
 def norm(s):
-    s = (s or "").lower()
+    s = html.unescape(s or "").lower()
+    s = re.sub(r"<[^>]+>", " ", s)
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return " ".join(s.split())
 
@@ -45,12 +57,12 @@ def tikwm_post(identifier):
     return obj["data"]
 
 
-def scan_user(username, query, max_pages=8):
+def scan_user_tikwm(username, query, max_pages=8):
     cursor = "0"
     seen = []
     best = None
     best_score = -10**9
-    for page in range(max_pages):
+    for _ in range(max_pages):
         qs = urllib.parse.urlencode({"unique_id": username, "count": "34", "cursor": cursor})
         obj = http_json(f"{TIKWM}/user/posts?{qs}")
         if int(obj.get("code", -1)) != 0 or not isinstance(obj.get("data"), dict):
@@ -73,11 +85,56 @@ def scan_user(username, query, max_pages=8):
         cursor = new_cursor
         time.sleep(1.15)
     if not best or best_score < 100:
-        raise RuntimeError(f"No credible match for {query!r} on @{username}; best_score={best_score}")
+        raise RuntimeError(f"No credible TikWM match for {query!r} on @{username}; best_score={best_score}")
     return best, seen
 
 
-def pick_video_url(post):
+def discover_id_urlebird(username, query):
+    profile = f"https://urlebird.com/user/{urllib.parse.quote(username)}/"
+    page = http_text(profile)
+    candidates = []
+    # Urlebird video links are stable /video/.../. Search contextual HTML around each link.
+    for m in re.finditer(r'href=["\']([^"\']*/video/[^"\']+)["\']', page, flags=re.I):
+        href = html.unescape(m.group(1))
+        lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
+        context=page[lo:hi]
+        s=score_title(context,query)
+        ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)',href)
+        candidates.append((s,href,ids[-1] if ids else "",norm(context)[:500]))
+    # Some builds expose the video path in JSON-escaped strings.
+    for m in re.finditer(r'(?:https?:\\?/\\?/urlebird\.com)?\\?/video\\?/([^"<\\]+)', page, flags=re.I):
+        frag=m.group(0).replace('\\/','/')
+        lo=max(0,m.start()-900); hi=min(len(page),m.end()+1800)
+        context=page[lo:hi]
+        s=score_title(context,query)
+        ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)',frag)
+        candidates.append((s,frag,ids[-1] if ids else "",norm(context)[:500]))
+    candidates.sort(key=lambda x:x[0],reverse=True)
+    if not candidates or candidates[0][0] < 200:
+        raise RuntimeError(f"Urlebird could not identify a credible {query!r} post; candidates={len(candidates)}")
+    s,href,vid,ctx=candidates[0]
+    if not vid:
+        detail=urllib.parse.urljoin(profile,href)
+        detail_html=http_text(detail)
+        ids=re.findall(r'(?<!\d)(\d{15,22})(?!\d)', detail_html)
+        if ids:
+            # Prefer IDs appearing in TikTok canonical/video URLs.
+            mm=re.search(r'tiktok\.com/@[^/"\']+/video/(\d{15,22})',detail_html,re.I)
+            vid=mm.group(1) if mm else ids[-1]
+    if not vid:
+        raise RuntimeError(f"Urlebird matched the title but exposed no TikTok video id: href={href}")
+    return vid,{"score":s,"urlebird_href":href,"context":ctx}
+
+
+def worker_post(tiktok_url):
+    url = WORKER + "?" + urllib.parse.urlencode({"down": tiktok_url})
+    obj=http_json(url,timeout=60)
+    if not isinstance(obj,dict) or not obj.get("download_url"):
+        raise RuntimeError(f"Worker resolver returned no download_url: {str(obj)[:500]}")
+    return obj
+
+
+def pick_tikwm_video_url(post):
     for k in ("hdplay", "play", "wmplay"):
         u = post.get(k)
         if u:
@@ -86,87 +143,91 @@ def pick_video_url(post):
 
 
 def download(url, out):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://www.tiktok.com/", "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(out, "wb") as f:
+    headers={"User-Agent": UA,"Referer":"https://www.tiktok.com/","Accept":"*/*"}
+    req=urllib.request.Request(url,headers=headers)
+    with urllib.request.urlopen(req,timeout=90) as r,open(out,"wb") as f:
         while True:
-            chunk = r.read(1024 * 1024)
-            if not chunk:
-                break
+            chunk=r.read(1024*1024)
+            if not chunk: break
             f.write(chunk)
     if out.stat().st_size < 200_000:
         raise RuntimeError(f"Downloaded file suspiciously small: {out.stat().st_size} bytes")
 
 
 def validate(path):
-    p = subprocess.run([
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name,width,height,duration",
-        "-show_entries", "format=duration,size", "-of", "json", str(path)
-    ], capture_output=True, text=True)
+    p=subprocess.run(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=codec_name,width,height,duration","-show_entries","format=duration,size","-of","json",str(path)],capture_output=True,text=True)
     if p.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {p.stderr[-2000:]}")
-    data = json.loads(p.stdout or "{}")
+    data=json.loads(p.stdout or "{}")
     if not data.get("streams"):
         raise RuntimeError("No video stream in downloaded file")
     return data
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="")
-    ap.add_argument("--username", default="")
-    ap.add_argument("--query", default="")
-    ap.add_argument("--out-dir", default="reference-out")
-    args = ap.parse_args()
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--url",default="")
+    ap.add_argument("--username",default="")
+    ap.add_argument("--query",default="")
+    ap.add_argument("--out-dir",default="reference-out")
+    args=ap.parse_args()
+    out_dir=Path(args.out_dir); out_dir.mkdir(parents=True,exist_ok=True)
+    scanned=[]; discovery={}
 
-    scanned = []
     if args.url:
-        post = tikwm_post(args.url)
-        resolver = "tikwm-url"
+        original_url=args.url
+        username=args.username.lstrip("@") or "unknown"
+        vid=(re.findall(r'/video/(\d{15,22})',original_url) or [""])[-1]
+        try:
+            post=tikwm_post(original_url)
+            media_url,media_field=pick_tikwm_video_url(post)
+            resolver="tikwm-url"
+            title=post.get("title") or ""
+            username=((post.get("author") or {}).get("unique_id") or username).lstrip("@")
+            vid=str(post.get("id") or post.get("video_id") or vid)
+            counts={"play_count":post.get("play_count"),"digg_count":post.get("digg_count"),"comment_count":post.get("comment_count"),"share_count":post.get("share_count")}
+        except Exception as e:
+            obj=worker_post(original_url)
+            resolver="worker-url"
+            media_url=obj["download_url"]; media_field="download_url"
+            title=obj.get("title") or ""; vid=str(obj.get("video_id") or vid)
+            author=obj.get("author") or {}; username=(author.get("username") or username).lstrip("@")
+            counts={"play_count":author.get("view_count"),"digg_count":author.get("like_count"),"comment_count":None,"share_count":None}
+            discovery={"tikwm_error":repr(e)}
     else:
         if not args.username or not args.query:
             ap.error("provide --url or both --username and --query")
-        candidate, scanned = scan_user(args.username, args.query)
-        vid = str(candidate.get("id") or candidate.get("video_id") or "")
-        if not vid:
-            raise RuntimeError("Matched post has no video id")
-        post = tikwm_post(vid)
-        resolver = "tikwm-user-feed+post-refresh"
+        username=args.username.lstrip("@")
+        try:
+            candidate,scanned=scan_user_tikwm(username,args.query)
+            vid=str(candidate.get("id") or candidate.get("video_id") or "")
+            if not vid: raise RuntimeError("Matched TikWM post has no video id")
+            post=tikwm_post(vid)
+            resolver="tikwm-user-feed+post-refresh"
+            original_url=f"https://www.tiktok.com/@{username}/video/{vid}"
+            media_url,media_field=pick_tikwm_video_url(post)
+            title=post.get("title") or candidate.get("title") or ""
+            username=((post.get("author") or {}).get("unique_id") or username).lstrip("@")
+            counts={"play_count":post.get("play_count"),"digg_count":post.get("digg_count"),"comment_count":post.get("comment_count"),"share_count":post.get("share_count")}
+        except Exception as e:
+            vid,discovery=discover_id_urlebird(username,args.query)
+            original_url=f"https://www.tiktok.com/@{username}/video/{vid}"
+            obj=worker_post(original_url)
+            resolver="urlebird-id+cloudflare-worker+tiktok-cdn"
+            media_url=obj["download_url"]; media_field="download_url"
+            title=obj.get("title") or args.query
+            author=obj.get("author") or {}; username=(author.get("username") or username).lstrip("@")
+            counts={"play_count":author.get("view_count"),"digg_count":author.get("like_count"),"comment_count":None,"share_count":None}
+            discovery["tikwm_error"]=repr(e)
 
-    vid = str(post.get("id") or post.get("video_id") or "")
-    username = ((post.get("author") or {}).get("unique_id") or args.username or "unknown").lstrip("@")
-    title = post.get("title") or ""
-    original_url = f"https://www.tiktok.com/@{username}/video/{vid}" if vid else args.url
-    media_url, media_field = pick_video_url(post)
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{username}_{vid}").strip("_") or "tiktok-reference"
-    video_path = out_dir / f"{safe}.mp4"
-    download(media_url, video_path)
-    probe = validate(video_path)
-
-    meta = {
-        "status": "success",
-        "resolver": resolver,
-        "username": username,
-        "query": args.query or None,
-        "title": title,
-        "video_id": vid,
-        "original_tiktok_url": original_url,
-        "media_field": media_field,
-        "play_count": post.get("play_count"),
-        "digg_count": post.get("digg_count"),
-        "comment_count": post.get("comment_count"),
-        "share_count": post.get("share_count"),
-        "duration": post.get("duration"),
-        "downloaded_file": str(video_path),
-        "bytes": video_path.stat().st_size,
-        "ffprobe": probe,
-        "scanned_candidates": scanned,
-    }
-    (out_dir / "tiktok-reference.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({k: meta[k] for k in ("status", "resolver", "username", "title", "video_id", "original_tiktok_url", "bytes")}, ensure_ascii=False))
+    safe=re.sub(r"[^A-Za-z0-9._-]+","_",f"{username}_{vid}").strip("_") or "tiktok-reference"
+    video_path=out_dir/f"{safe}.mp4"
+    download(media_url,video_path)
+    probe=validate(video_path)
+    meta={"status":"success","resolver":resolver,"username":username,"query":args.query or None,"title":title,"video_id":vid,"original_tiktok_url":original_url,"media_field":media_field,**counts,"downloaded_file":str(video_path),"bytes":video_path.stat().st_size,"ffprobe":probe,"discovery":discovery,"scanned_candidates":scanned}
+    (out_dir/"tiktok-reference.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding="utf-8")
+    print(json.dumps({k:meta[k] for k in ("status","resolver","username","title","video_id","original_tiktok_url","bytes")},ensure_ascii=False))
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
