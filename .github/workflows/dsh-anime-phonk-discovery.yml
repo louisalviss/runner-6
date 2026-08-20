@@ -1,0 +1,142 @@
+name: DSH Anime Phonk Discovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-anime-phonk-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-anime-phonk
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+      MODEL_ID: "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+
+      - name: Configure OpenRouter model
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-nemotron:
+                displayName: OpenRouter Nemotron Free
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: nvidia/nemotron-3-ultra-550b-a55b:free
+                    name: Nemotron 3 Ultra Free
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-nemotron
+            model: nvidia/nemotron-3-ultra-550b-a55b:free
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+
+      - name: Activate runtime
+        run: bash workspace/scripts/activate-dsh-runtime.sh
+
+      - name: Configure browser
+        run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Let DSH choose anime fight scene
+        id: dsh
+        working-directory: workspace
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -uo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff
+          TASK='Use the Playwright browser and current public web information to independently identify ONE anime fight video/scene that is especially suitable for a 15-30 second TikTok/Reels edit using a currently viral phonk/funk track. Do not start from a preselected anime, character, fight, source URL, or song. Research current signals and make the choice yourself. Optimize for visual recognition, immediate hook in the first 1-2 seconds, strong impact frames, speed/energy changes that can sync to bass drops, a clear payoff/reveal, low dependence on dialogue, crop resilience for 9:16, and current social relevance. Also identify one current viral phonk/funk track that fits the selected scene. Find a public reference URL for the exact scene/video and a public reference URL for the exact music track. Do not download media. Create dsh-handoff/anime-phonk-selection.json with: anime, fight_or_scene, characters, scene_reference_url, suggested_clip_window_or_moment, suggested_duration_seconds, phonk_title, phonk_artist, phonk_reference_url, why_match, edit_plan, current_signals, confidence. current_signals must be a short array of concrete recent signals/sources. edit_plan should describe hook, buildup, drop/payoff, and ending in concise terms. Finish with DSH_ANIME_PHONK_SELECTED.'
+          START=$(date +%s)
+          set +e
+          timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          CODE=$?
+          set -e
+          END=$(date +%s)
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "agent_seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+
+      - name: Publish status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DSH_CODE: ${{ steps.dsh.outputs.exit_code }}
+          AGENT_SECONDS: ${{ steps.dsh.outputs.agent_seconds }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json, os
+          from pathlib import Path
+          p=Path('dsh-handoff/anime-phonk-selection.json')
+          data={
+            'status':'success' if os.environ.get('DSH_CODE')=='0' and p.exists() else 'error',
+            'run_id':os.environ['GITHUB_RUN_ID'],
+            'model':'nvidia/nemotron-3-ultra-550b-a55b:free',
+            'dsh_exit_code':os.environ.get('DSH_CODE',''),
+            'agent_seconds':int(os.environ.get('AGENT_SECONDS') or 0),
+          }
+          if p.exists():
+            try:data['selection']=json.loads(p.read_text())
+            except Exception as e:data['selection_error']=str(e)
+          print(json.dumps(data,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          F="dsh-anime-phonk-status.json"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$F?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH anime phonk status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$F" -f message='Update DSH anime phonk status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
+      - name: Upload selection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-anime-phonk-${{ github.run_id }}
+          path: workspace/dsh-handoff/
+          retention-days: 2
+          if-no-files-found: warn
+
+      - name: Validate
+        run: '[ "${{ steps.dsh.outputs.exit_code }}" = "0" ] && test -s workspace/dsh-handoff/anime-phonk-selection.json'
