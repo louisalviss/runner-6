@@ -1,0 +1,56 @@
+name: Fetch Licensed Slay Sped Up
+on:
+  push:
+    branches: [main]
+    paths:
+      - "fetch-slay-trigger.txt"
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MUSIC_URL: "https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-slay-sped-up.mp3"
+      LICENSE_PAGE: "https://www.free-stock-music.com/alex-productions-slay-sped-up.html"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish running status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '{"status":"running","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json" -f message='Slay fetch running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json" -f message='Slay fetch running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+      - name: Download licensed MP3
+        run: |
+          set -euo pipefail
+          mkdir -p licensed-audio
+          curl --fail --location --retry 2 --retry-all-errors --connect-timeout 20 --max-time 120 \
+            -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36' \
+            -e "$LICENSE_PAGE" "$MUSIC_URL" -o licensed-audio/slay-sped-up.mp3
+          test "$(stat -c '%s' licensed-audio/slay-sped-up.mp3)" -gt 500000
+          cat > licensed-audio/MUSIC_CREDIT.txt <<'CREDIT'
+Slay (Sped Up) by Alex-Productions | https://onsound.eu/
+Royalty Free Music by https://www.free-stock-music.com
+Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
+https://creativecommons.org/licenses/by/3.0/deed.en_US
+CREDIT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licensed-slay-${{ github.run_id }}
+          path: licensed-audio/
+          retention-days: 2
+          compression-level: 0
+      - name: Publish final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRESENT=false; [ -s licensed-audio/slay-sped-up.mp3 ] && PRESENT=true
+          STATUS=error; [ "$PRESENT" = true ] && STATUS=success
+          printf '{"status":"%s","run_id":"%s","artifact_present":%s}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json" -f message='Slay fetch final [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/fetch-slay-status.json" -f message='Slay fetch final [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
