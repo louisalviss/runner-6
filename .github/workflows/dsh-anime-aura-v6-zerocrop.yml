@@ -1,0 +1,119 @@
+name: DSH Anime Aura V6 Zero Crop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-anime-aura-v6-zerocrop-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-anime-aura-v6-zerocrop
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VIDEO_URL: "https://www.youtube.com/watch?v=lDzXBSxAxKw"
+      MUSIC_URL: "https://www.tiktok.com/@nekit228012/video/7651537153373097248"
+      STATUS_FILE: "dsh-anime-aura-v6-zerocrop-status.json"
+      OUTPUT_FILE: "dsh-handoff/render/sukuna_mahoraga_yara_aura_v6_zerocrop.mp4"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workspace
+          persist-credentials: false
+      - name: Publish running status
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","phase":"setup","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime aura V6 zero crop running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime aura V6 zero crop running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+      - name: Install ffmpeg and downloader
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+      - name: Download fight source
+        id: video
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff
+          mkdir -p dsh-handoff/downloads dsh-handoff/render
+          bash scripts/dsh-download-media.sh "$VIDEO_URL" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$P"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+      - name: Download Yara Yara aura sound
+        id: music
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          bash scripts/dsh-download-media.sh "${MUSIC_URL}#dsh-audio" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$P"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+      - name: Render V6 zero crop
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          python scripts/render-dsh-anime-aura-v6-zerocrop.py "${{ steps.video.outputs.path }}" "${{ steps.music.outputs.path }}" "$OUTPUT_FILE" dsh-handoff/render/edit-analysis-v6.json
+      - name: QA
+        working-directory: workspace
+        run: |
+          set -euo pipefail
+          ffprobe -v error -show_entries stream=codec_type,width,height,codec_name -show_entries format=duration,size -of json "$OUTPUT_FILE" > dsh-handoff/render/ffprobe-v6.json
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/render/ffprobe-v6.json'))
+          v=next(s for s in p['streams'] if s['codec_type']=='video')
+          assert int(v['width'])==1080 and int(v['height'])==1920, v
+          d=float(p['format']['duration']); assert 16 <= d <= 20, d
+          assert int(p['format']['size']) > 1000000
+          PY
+      - name: Upload V6
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-anime-aura-v6-zerocrop-${{ github.run_id }}
+          path: |
+            workspace/dsh-handoff/render/sukuna_mahoraga_yara_aura_v6_zerocrop.mp4
+            workspace/dsh-handoff/render/edit-analysis-v6.json
+            workspace/dsh-handoff/render/ffprobe-v6.json
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
+      - name: Publish final status
+        if: always()
+        working-directory: workspace
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/status.json"
+          import json,os
+          from pathlib import Path
+          v=Path(os.environ['OUTPUT_FILE']); a=Path('dsh-handoff/render/edit-analysis-v6.json'); q=Path('dsh-handoff/render/ffprobe-v6.json')
+          d={'status':'success' if v.exists() and v.stat().st_size else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':bool(v.exists() and v.stat().st_size),'video_url':os.environ['VIDEO_URL'],'music_url':os.environ['MUSIC_URL']}
+          if v.exists(): d['bytes']=v.stat().st_size
+          if a.exists():
+            try:d['edit_analysis']=json.loads(a.read_text())
+            except:pass
+          if q.exists():
+            try:d['ffprobe']=json.loads(q.read_text())
+            except:pass
+          print(json.dumps(d,ensure_ascii=False,separators=(',',':')))
+          PY
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime aura V6 zero crop status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime aura V6 zero crop status [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
