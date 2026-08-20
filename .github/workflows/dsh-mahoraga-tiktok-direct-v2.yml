@@ -30,7 +30,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg python3-pip
-          python3 -m pip install --user -U --pre 'yt-dlp[default,curl-cffi]'
+          python3 -m pip install --user -U --pre 'yt-dlp[default,curl-cffi]' pillow
 
       - name: Resolve exact TikTok post directly from profile
         id: resolve
@@ -59,8 +59,7 @@ jobs:
               if score: rows.append((score,vid,title))
           rows.sort(reverse=True)
           print('matches=',rows[:10])
-          if not rows or rows[0][0] < 10:
-              raise SystemExit('exact target not found')
+          if not rows or rows[0][0] < 10: raise SystemExit('exact target not found')
           _,vid,title=rows[0]
           url=f'https://www.tiktok.com/@divine_daniel21/video/{vid}'
           Path('out/target_url.txt').write_text(url+'\n')
