@@ -16,9 +16,28 @@ jobs:
     env:
       MUSIC_URL: "https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-metaphonk.mp3"
       LICENSE_PAGE: "https://www.free-stock-music.com/alex-productions-metaphonk.html"
+      STATUS_FILE: "fetch-metaphonk-status.json"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Publish running status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Metaphonk fetch running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Metaphonk fetch running [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
       - name: Download licensed MP3
+        id: download
         run: |
           set -euo pipefail
           mkdir -p licensed-audio
@@ -26,16 +45,44 @@ jobs:
             --connect-timeout 20 --max-time 120 \
             -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36' \
             -e "$LICENSE_PAGE" "$MUSIC_URL" -o licensed-audio/metaphonk.mp3
-          test "$(stat -c '%s' licensed-audio/metaphonk.mp3)" -gt 500000
+          B="$(stat -c '%s' licensed-audio/metaphonk.mp3)"
+          test "$B" -gt 500000
+          echo "bytes=$B" >> "$GITHUB_OUTPUT"
           cat > licensed-audio/MUSIC_CREDIT.txt <<'EOF'
           Metaphonk by Alex-Productions | https://onsound.eu/
           Royalty Free Music by https://www.free-stock-music.com
           Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
           https://creativecommons.org/licenses/by/3.0/deed.en_US
           EOF
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload licensed audio
+        id: upload
+        uses: actions/upload-artifact@v4
         with:
           name: licensed-metaphonk-${{ github.run_id }}
           path: licensed-audio/
           retention-days: 2
           compression-level: 0
+          if-no-files-found: error
+
+      - name: Publish final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          BYTES: ${{ steps.download.outputs.bytes }}
+        run: |
+          set -euo pipefail
+          STATUS=error
+          PRESENT=false
+          if [ "$DOWNLOAD_OUTCOME" = success ] && [ "$UPLOAD_OUTCOME" = success ]; then STATUS=success; PRESENT=true; fi
+          printf '{"status":"%s","run_id":"%s","artifact_present":%s,"bytes":%s,"license_page":"%s"}\n' \
+            "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "${BYTES:-0}" "$LICENSE_PAGE" > "$RUNNER_TEMP/status.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update Metaphonk fetch status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update Metaphonk fetch status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
