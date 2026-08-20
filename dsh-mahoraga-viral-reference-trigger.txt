@@ -1,3 +1,6 @@
-2026-08-20T21:03+07:00
-reference: divine_daniel21 Mahoraga x The Largest
-mirror: https://www.youtube.com/watch?v=EqvJXq81jw8
+2026-08-20T21:07+07:00
+source: TikTok direct only
+creator: @divine_daniel21
+query: Mahoraga x The Largest (BigXthaPlug)
+no_youtube_fallback: true
+nonce: tiktok-direct-1
