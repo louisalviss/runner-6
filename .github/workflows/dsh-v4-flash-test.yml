@@ -16,7 +16,7 @@ jobs:
     env:
       DSH_VERSION: "0.1.0-rc.7"
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
-      MODEL_ID: deepseek/deepseek-v4-flash
+      MODEL_ID: deepseek/deepseek-v4-flash-0731
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,21 +35,21 @@ jobs:
           llm-pi-ai:
             providers:
               openrouter-flash:
-                displayName: OpenRouter DeepSeek V4 Flash
+                displayName: OpenRouter DeepSeek V4 Flash 0731
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
                 baseURL: https://openrouter.ai/api/v1
                 compat:
                   thinkingFormat: openrouter
                 models:
-                  - id: "deepseek/deepseek-v4-flash"
-                    name: "DeepSeek V4 Flash"
-                    contextWindow: 1000000
+                  - id: "deepseek/deepseek-v4-flash-0731"
+                    name: "DeepSeek V4 Flash 0731"
+                    contextWindow: 1048576
                     maxTokens: 8192
                     input: [text]
           agent-default-model:
             provider: openrouter-flash
-            model: "deepseek/deepseek-v4-flash"
+            model: "deepseek/deepseek-v4-flash-0731"
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
       - name: Restore DSH runtime
