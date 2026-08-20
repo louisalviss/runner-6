@@ -1,0 +1,199 @@
+name: DSH Mahoraga exact TikTok download
+
+on:
+  push:
+    branches:
+      - feature/dsh-tiktok-resolver
+    paths:
+      - 'dsh-mahoraga-tiktok-exact-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  exact-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TIKTOK_URL: https://www.tiktok.com/@divine_daniel21/video/7553165513183022353
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish running status
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":"%s","url":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" "$TIKTOK_URL" > dsh-mahoraga-tiktok-exact-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-exact-status.json
+          git commit -m 'Exact TikTok download running [skip ci]' || true
+          git pull --rebase origin feature/dsh-tiktok-resolver
+          git push origin HEAD:feature/dsh-tiktok-resolver
+
+      - name: Install yt-dlp nightly with browser impersonation
+        run: |
+          set -euo pipefail
+          python3 -m pip install -q -U --pre 'yt-dlp[default,curl-cffi]' playwright
+          python3 -m yt_dlp --version
+          python3 -m yt_dlp --list-impersonate-targets || true
+          command -v google-chrome || command -v google-chrome-stable
+
+      - name: Try exact TikTok with yt-dlp direct
+        id: direct
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          rm -rf reference-exact
+          mkdir -p reference-exact/logs
+          OK=0
+          for N in 1 2 3 4 5 6; do
+            echo "=== direct yt-dlp attempt $N ==="
+            rm -f reference-exact/mahoraga_reference.mp4
+            set +e
+            python3 -m yt_dlp -v \
+              --impersonate chrome \
+              --no-playlist \
+              --socket-timeout 30 \
+              --retries 3 \
+              --file-access-retries 3 \
+              -f 'b[ext=mp4]/b' \
+              -o 'reference-exact/mahoraga_reference.%(ext)s' \
+              "$TIKTOK_URL" >"reference-exact/logs/direct-$N.log" 2>&1
+            CODE=$?
+            set -e
+            if [ "$CODE" -eq 0 ]; then
+              F="$(find reference-exact -maxdepth 1 -type f -name 'mahoraga_reference.*' | head -n1)"
+              if [ -n "$F" ] && [ "$(stat -c%s "$F")" -gt 300000 ]; then
+                mv "$F" reference-exact/mahoraga_reference.mp4 2>/dev/null || true
+                echo direct > reference-exact/route.txt
+                OK=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$OK" -eq 1
+
+      - name: Enable WARP if direct failed
+        if: steps.direct.outcome == 'failure'
+        run: bash scripts/setup-cloudflare-warp.sh
+
+      - name: Try exact TikTok with yt-dlp through WARP
+        id: warp
+        if: steps.direct.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          mkdir -p reference-exact/logs
+          OK=0
+          for N in 1 2 3 4 5 6; do
+            echo "=== WARP yt-dlp attempt $N ==="
+            rm -f reference-exact/mahoraga_reference.mp4
+            set +e
+            python3 -m yt_dlp -v \
+              --impersonate chrome \
+              --no-playlist \
+              --socket-timeout 30 \
+              --retries 3 \
+              --file-access-retries 3 \
+              -f 'b[ext=mp4]/b' \
+              -o 'reference-exact/mahoraga_reference.%(ext)s' \
+              "$TIKTOK_URL" >"reference-exact/logs/warp-$N.log" 2>&1
+            CODE=$?
+            set -e
+            if [ "$CODE" -eq 0 ]; then
+              F="$(find reference-exact -maxdepth 1 -type f -name 'mahoraga_reference.*' | head -n1)"
+              if [ -n "$F" ] && [ "$(stat -c%s "$F")" -gt 300000 ]; then
+                mv "$F" reference-exact/mahoraga_reference.mp4 2>/dev/null || true
+                echo warp-yt-dlp > reference-exact/route.txt
+                OK=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$OK" -eq 1
+
+      - name: Playwright capture TikTok CDN if yt-dlp failed
+        id: browser
+        if: steps.direct.outcome == 'failure' && steps.warp.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 scripts/dsh-tiktok-browser-capture.py "$TIKTOK_URL" --out-dir reference-exact | tee reference-exact/logs/playwright.log
+          echo warp-playwright-cdn > reference-exact/route.txt
+
+      - name: Disconnect WARP
+        if: always()
+        run: warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+
+      - name: Validate downloaded TikTok and build contact sheet
+        id: validate
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s reference-exact/mahoraga_reference.mp4
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-pil >/dev/null
+          ffprobe -v error -show_entries stream=codec_name,width,height,duration -show_entries format=duration,size -of json reference-exact/mahoraga_reference.mp4 > reference-exact/ffprobe.json
+          mkdir -p reference-exact/frames
+          ffmpeg -y -v error -i reference-exact/mahoraga_reference.mp4 -vf 'fps=6,scale=480:-2' -q:v 3 reference-exact/frames/f_%04d.jpg
+          python3 - <<'PY'
+          from PIL import Image,ImageDraw
+          import glob,math
+          fs=glob.glob('reference-exact/frames/*.jpg')[:120]
+          ims=[]
+          for i,p in enumerate(fs):
+              im=Image.open(p).convert('RGB')
+              c=Image.new('RGB',(480,320),'black')
+              c.paste(im,((480-im.width)//2,(300-im.height)//2))
+              ImageDraw.Draw(c).text((8,300),f'{i/6:.3f}s',fill='white')
+              ims.append(c)
+          cols=4; rows=max(1,math.ceil(len(ims)/cols))
+          out=Image.new('RGB',(480*cols,320*rows),'black')
+          for i,im in enumerate(ims): out.paste(im,((i%cols)*480,(i//cols)*320))
+          out.save('reference-exact/contact_6fps.jpg',quality=88)
+          PY
+          ffmpeg -hide_banner -i reference-exact/mahoraga_reference.mp4 -filter_complex "select='gt(scene,0.25)',metadata=print:file=reference-exact/scene-cuts.txt" -an -f null - 2>/dev/null || true
+
+      - name: Upload exact TikTok reference or diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahoraga-tiktok-exact-${{ github.run_id }}
+          path: reference-exact/
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: warn
+
+      - name: Publish final status
+        if: always()
+        run: |
+          set -euo pipefail
+          STATUS='failure'
+          PRESENT=false
+          ROUTE=''
+          BYTES=0
+          PROBE='{}'
+          if [ -s reference-exact/mahoraga_reference.mp4 ] && [ -s reference-exact/ffprobe.json ]; then
+            STATUS='success'
+            PRESENT=true
+            BYTES="$(stat -c%s reference-exact/mahoraga_reference.mp4)"
+            ROUTE="$(cat reference-exact/route.txt 2>/dev/null || true)"
+            PROBE="$(tr -d '\n' < reference-exact/ffprobe.json)"
+          fi
+          python3 - "$STATUS" "$GITHUB_RUN_ID" "$TIKTOK_URL" "$PRESENT" "$ROUTE" "$BYTES" "$PROBE" <<'PY'
+          import json,sys
+          status,run_id,url,present,route,bytes_,probe=sys.argv[1:]
+          out={'status':status,'run_id':run_id,'url':url,'artifact_present':present=='true','route':route,'bytes':int(bytes_ or 0)}
+          try: out['ffprobe']=json.loads(probe)
+          except: out['ffprobe']={}
+          open('dsh-mahoraga-tiktok-exact-status.json','w').write(json.dumps(out,separators=(',',':'))+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-exact-status.json
+          git commit -m 'Update exact TikTok download status [skip ci]' || true
+          git pull --rebase origin feature/dsh-tiktok-resolver
+          git push origin HEAD:feature/dsh-tiktok-resolver
