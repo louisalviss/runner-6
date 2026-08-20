@@ -1,4 +1,4 @@
-2026-08-20T07:50+07:00
+2026-08-20T08:02+07:00
 render: sukuna-vs-mahoraga + montagem-alquimia
 objective: split, recut, vertical edit, sync drop, retain low-level SFX, export mp4
-nonce: observable-final-1
+nonce: old-workflow-final-2
