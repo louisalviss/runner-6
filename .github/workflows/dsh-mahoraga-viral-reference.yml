@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   fetch-reference:
@@ -15,6 +15,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Publish running status
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > dsh-mahoraga-viral-reference-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-viral-reference-status.json
+          git commit -m 'Mahoraga viral reference running [skip ci]' || true
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Install ffmpeg and downloader
         run: |
@@ -40,10 +51,9 @@ jobs:
           mkdir -p reference-out/frames
           ffmpeg -y -v error -i "$V" -vf "fps=4,scale=480:-2" -q:v 2 reference-out/frames/f_%04d.jpg
           python - <<'PY'
-          from PIL import Image, ImageOps, ImageDraw
-          import glob, math, os
-          files=glob.glob('reference-out/frames/*.jpg')
-          files=files[:80]
+          from PIL import Image, ImageDraw
+          import glob, math
+          files=glob.glob('reference-out/frames/*.jpg')[:80]
           thumbs=[]
           for i,p in enumerate(files):
               im=Image.open(p).convert('RGB')
@@ -51,7 +61,7 @@ jobs:
               canvas.paste(im,((480-im.width)//2,0))
               ImageDraw.Draw(canvas).text((8,276),f'{i/4:.2f}s',fill='white')
               thumbs.append(canvas)
-          cols=4; rows=math.ceil(len(thumbs)/cols)
+          cols=4; rows=max(1,math.ceil(len(thumbs)/cols))
           out=Image.new('RGB',(480*cols,300*rows),'black')
           for i,im in enumerate(thumbs): out.paste(im,((i%cols)*480,(i//cols)*300))
           out.save('reference-out/contact_4fps.jpg',quality=92)
@@ -64,3 +74,18 @@ jobs:
           path: reference-out/
           retention-days: 2
           if-no-files-found: error
+
+      - name: Publish final status
+        if: always()
+        run: |
+          set -euo pipefail
+          STATUS='${{ job.status }}'
+          PRESENT=false
+          if [ "$STATUS" = success ]; then PRESENT=true; fi
+          printf '{"status":"%s","run_id":"%s","artifact_present":%s,"artifact_name":"mahoraga-viral-reference-%s"}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$GITHUB_RUN_ID" > dsh-mahoraga-viral-reference-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-viral-reference-status.json
+          git commit -m 'Update Mahoraga viral reference status [skip ci]' || true
+          git pull --rebase origin main
+          git push origin HEAD:main
