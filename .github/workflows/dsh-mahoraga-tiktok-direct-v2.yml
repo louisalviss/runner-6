@@ -1,0 +1,155 @@
+name: DSH Mahoraga TikTok direct v2
+
+on:
+  push:
+    branches: [dsh-tiktok-mahoraga-direct]
+    paths: ['dsh-mahoraga-tiktok-v2-trigger.txt']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Status running
+        run: |
+          printf '{"status":"running","run_id":"%s","phase":"setup"}\n' "$GITHUB_RUN_ID" > dsh-mahoraga-tiktok-v2-status.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-v2-status.json
+          git commit -m 'TikTok v2 running [skip ci]' || true
+          git push origin HEAD:"$GITHUB_REF_NAME"
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-pip
+          python3 -m pip install --user -U --pre 'yt-dlp[default,curl-cffi]'
+
+      - name: Resolve exact TikTok post directly from profile
+        id: resolve
+        run: |
+          set -euo pipefail
+          YTDLP="$HOME/.local/bin/yt-dlp"
+          mkdir -p out dsh-handoff/downloads
+          "$YTDLP" --flat-playlist --playlist-end 200 --socket-timeout 20 --retries 1 --impersonate chrome \
+            --print '%(id)s|||%(title)s|||%(webpage_url)s' \
+            'https://www.tiktok.com/@divine_daniel21' > out/profile.txt
+          echo "profile_rows=$(wc -l < out/profile.txt)"
+          grep -i 'mahoraga' out/profile.txt | head -20 || true
+          python3 - <<'PY'
+          from pathlib import Path
+          rows=[]
+          for line in Path('out/profile.txt').read_text(errors='replace').splitlines():
+              parts=line.split('|||',2)
+              if len(parts)<2: continue
+              vid,title=parts[0],parts[1]
+              low=title.lower()
+              score=0
+              score += 5 if 'mahoraga' in low else 0
+              score += 5 if 'the largest' in low else 0
+              score += 2 if 'bigxthaplug' in low else 0
+              score += 1 if 'big raga' in low else 0
+              if score: rows.append((score,vid,title))
+          rows.sort(reverse=True)
+          print('matches=',rows[:10])
+          if not rows or rows[0][0] < 10:
+              raise SystemExit('exact target not found')
+          _,vid,title=rows[0]
+          url=f'https://www.tiktok.com/@divine_daniel21/video/{vid}'
+          Path('out/target_url.txt').write_text(url+'\n')
+          Path('out/target_title.txt').write_text(title+'\n')
+          print('TARGET',url,title)
+          PY
+          TARGET="$(cat out/target_url.txt)"
+          echo "target_url=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact TikTok post directly
+        env:
+          TARGET_URL: ${{ steps.resolve.outputs.target_url }}
+        run: |
+          set -euo pipefail
+          YTDLP="$HOME/.local/bin/yt-dlp"
+          : > out/download.log
+          attempt() {
+            local host="$1"
+            local args=(--no-playlist --impersonate chrome --socket-timeout 20 --retries 2 --fragment-retries 2 --restrict-filenames -P dsh-handoff/downloads -o '%(title).100s_[%(id)s].%(ext)s' --print 'after_move:filepath' -f 'best[height<=1080]/best')
+            [ -n "$host" ] && args+=(--extractor-args "tiktok:api_hostname=$host")
+            set +e
+            "$YTDLP" "${args[@]}" "$TARGET_URL" > out/path.txt 2>>out/download.log
+            c=$?
+            set -e
+            if [ "$c" -eq 0 ]; then
+              f="$(tail -n1 out/path.txt)"
+              [ -n "$f" ] && [ -s "$f" ] && return 0
+            fi
+            return 1
+          }
+          ok=0
+          for h in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
+            if attempt "$h"; then ok=1; break; fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            bash scripts/setup-cloudflare-warp.sh >>out/download.log 2>&1 || true
+            for h in '' 'api16-normal-c-useast1a.tiktokv.com' 'api22-normal-c-alisg.tiktokv.com' 'api22-normal-c-useast2a.tiktokv.com'; do
+              if attempt "$h"; then ok=1; break; fi
+            done
+          fi
+          warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+          [ "$ok" -eq 1 ] || { tail -n 100 out/download.log; exit 12; }
+          V="$(tail -n1 out/path.txt)"
+          cp "$V" out/reference.${V##*.}
+          ffprobe -v error -show_streams -show_format -of json "$V" > out/ffprobe.json
+
+      - name: Build analysis sheets
+        run: |
+          set -euo pipefail
+          V="$(find out -maxdepth 1 -name 'reference.*' -type f | head -n1)"
+          mkdir -p out/frames12
+          ffmpeg -y -v error -i "$V" -vf 'fps=12,scale=640:-2' -q:v 2 out/frames12/f_%05d.jpg
+          python3 - <<'PY'
+          from PIL import Image,ImageDraw
+          from pathlib import Path
+          import math
+          fs=sorted(Path('out/frames12').glob('*.jpg')); per=48; cols=6
+          for si in range(math.ceil(len(fs)/per)):
+              chunk=fs[si*per:(si+1)*per]
+              if not chunk: continue
+              cells=[]
+              for gi,p in enumerate(chunk,start=si*per):
+                  im=Image.open(p).convert('RGB'); c=Image.new('RGB',(640,im.height+26),'black'); c.paste(im,(0,0)); ImageDraw.Draw(c).text((8,im.height+4),f'{gi/12:.3f}s',fill='white'); cells.append(c)
+              h=cells[0].height; rows=math.ceil(len(cells)/cols); sheet=Image.new('RGB',(640*cols,h*rows),'black')
+              for i,c in enumerate(cells): sheet.paste(c,((i%cols)*640,(i//cols)*h))
+              sheet.save(f'out/contact12_{si+1:02d}.jpg',quality=90)
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahoraga-tiktok-v2-${{ github.run_id }}
+          path: out/
+          retention-days: 2
+
+      - name: Final status
+        if: always()
+        run: |
+          STATUS='${{ job.status }}'; PRESENT=false; TARGET=''
+          [ "$STATUS" = success ] && PRESENT=true
+          [ -f out/target_url.txt ] && TARGET="$(cat out/target_url.txt)"
+          python3 - "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" "$TARGET" <<'PY'
+          import json,sys
+          st,r,p,t=sys.argv[1:]
+          open('dsh-mahoraga-tiktok-v2-status.json','w').write(json.dumps({'status':st,'phase':'done','run_id':r,'artifact_present':p=='true','artifact_name':f'mahoraga-tiktok-v2-{r}','target_url':t})+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dsh-mahoraga-tiktok-v2-status.json
+          git commit -m 'Update TikTok v2 status [skip ci]' || true
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin HEAD:"$GITHUB_REF_NAME"
