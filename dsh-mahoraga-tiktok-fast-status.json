@@ -1,1 +1,1 @@
-{"status":"running","phase":"setup","run_id":"32379167545","source":"tiktok-direct"}
+{"status": "failure", "phase": "done", "run_id": "32379167545", "artifact_present": false, "artifact_name": "mahoraga-tiktok-fast-32379167545", "source": "tiktok-direct", "target_url": ""}
