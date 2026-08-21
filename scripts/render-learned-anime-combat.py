@@ -101,49 +101,66 @@ def audio_features(path, step=0.02):
 
 
 def choose_source_window(sa, duration, target=TARGET):
-    impacts = sorted(float(x) for x in sa.get('impact_times_sec', []) if 0.6 < float(x) < duration - 0.6)
+    impacts = sorted(float(x) for x in sa.get('impact_times_sec', []) if 0.15 < float(x) < duration - 0.15)
+    if len(impacts) < 3:
+        raise SystemExit(f'source analysis has only {len(impacts)} impacts; need >=3')
     if duration <= target + 0.1:
         return 0.0, min(target, duration - 0.05), impacts
+
+    # Build windows around every detected impact at several useful positions.
+    # Count genuine impacts first; only then use temporal spread as tie-breaker.
     starts = {0.0, max(0.0, duration - target)}
+    desired_positions = (0.15, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 18.0, 19.5, 19.85)
     for t in impacts:
-        for lead in (0.6, 1.2, 2.0, 3.0):
-            starts.add(max(0.0, min(duration - target, t - lead)))
+        for pos in desired_positions:
+            starts.add(max(0.0, min(duration - target, t - pos)))
+
     best = None
     for s in sorted(starts):
         e = s + target
-        inside = [t for t in impacts if s + 0.7 <= t <= e - 0.7]
+        inside = [t for t in impacts if s + 0.12 <= t <= e - 0.12]
         rel = [t - s for t in inside]
-        spaced = []
+        # For scoring only, collapse near-duplicates caused by the detector.
+        distinct = []
         for t in rel:
-            if not spaced or t - spaced[-1] >= 1.25:
-                spaced.append(t)
-        spread = (spaced[-1] - spaced[0]) / target if len(spaced) >= 2 else 0.0
-        score = len(spaced) * 2.0 + spread * 2.2
-        if rel and rel[0] < 2.5:
-            score += 0.8
-        if best is None or score > best[0]:
-            best = (score, s, inside)
-    return round(best[1], 3), target, best[2]
+            if not distinct or t - distinct[-1] >= 0.70:
+                distinct.append(t)
+        spread = (distinct[-1] - distinct[0]) / target if len(distinct) >= 2 else 0.0
+        early = 1.0 if distinct and distinct[0] <= 2.5 else 0.0
+        late = 1.0 if distinct and distinct[-1] >= 15.0 else 0.0
+        # Lexicographic priority encoded strongly: impact count dominates.
+        score = len(distinct) * 100.0 + spread * 8.0 + early * 1.5 + late * 1.0
+        candidate = (score, len(distinct), spread, -s, s, inside)
+        if best is None or candidate[:4] > best[:4]:
+            best = candidate
+
+    if best is None or best[1] < 3:
+        raise SystemExit(f'could not find a {target:.1f}s source window with >=3 impacts')
+    return round(best[4], 3), target, best[5]
 
 
 def select_impact_anchors(inside_abs, start, max_events=5):
-    rel = [float(t - start) for t in inside_abs if 1.0 <= t - start <= TARGET - 1.0]
+    raw = sorted(float(t - start) for t in inside_abs if 0.12 <= t - start <= TARGET - 0.12)
+    if len(raw) < 3:
+        return raw
+
+    # Collapse only true detector-near-duplicates. Combat hits ~1s apart remain distinct.
     groups = []
-    for t in rel:
-        if not groups or t - groups[-1][-1] > 1.35:
+    for t in raw:
+        if not groups or t - groups[-1][-1] > 0.70:
             groups.append([t])
         else:
             groups[-1].append(t)
     reps = [g[len(g)//2] for g in groups]
+
+    # If grouping became too aggressive, preserve three well-spread real impacts.
+    if len(reps) < 3 and len(raw) >= 3:
+        idx = np.linspace(0, len(raw) - 1, 3).round().astype(int)
+        reps = [raw[i] for i in sorted(set(idx.tolist()))]
+
     if len(reps) > max_events:
         idx = np.linspace(0, len(reps) - 1, max_events).round().astype(int)
         reps = [reps[i] for i in sorted(set(idx.tolist()))]
-    while len(reps) > 3:
-        gaps = [reps[0]] + [reps[i] - reps[i-1] for i in range(1, len(reps))] + [TARGET - reps[-1]]
-        if min(gaps) >= 1.0:
-            break
-        worst = min(range(len(reps)), key=lambda i: min(reps[i] - (reps[i-1] if i else 0), (reps[i+1] if i+1 < len(reps) else TARGET) - reps[i]))
-        reps.pop(worst)
     return reps
 
 
@@ -154,7 +171,7 @@ def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
     prev_s = 0.0
     prev_t = 0.0
     for s in source_impacts:
-        candidates = [b for b in beats if b > prev_t + 0.55 and b < duration - 0.55]
+        candidates = [b for b in beats if b > prev_t + 0.55 and b < duration - 0.20]
         if not candidates:
             break
         def cost(b):
@@ -176,9 +193,19 @@ def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
         speeds = [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
         if min(speeds) >= 0.72 and max(speeds) <= 1.35:
             break
-        source_impacts.pop()
-        chosen.pop()
+        # Drop the anchor causing the largest local speed distortion, not always the finisher.
+        distortion = []
+        for j in range(len(source_impacts)):
+            s2 = [0.0] + source_impacts[:j] + source_impacts[j+1:] + [duration]
+            t2 = [0.0] + chosen[:j] + chosen[j+1:] + [duration]
+            sp = [(s2[i+1] - s2[i]) / max(1e-6, t2[i+1] - t2[i]) for i in range(len(s2)-1)]
+            distortion.append(max(abs(x - 1.0) for x in sp))
+        j = int(np.argmin(distortion))
+        source_impacts.pop(j)
+        chosen.pop(j)
 
+    if len(source_impacts) < 3:
+        raise SystemExit('beat mapping retained fewer than 3 impacts')
     sa = [0.0] + source_impacts + [duration]
     ta = [0.0] + chosen + [duration]
     speeds = [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
