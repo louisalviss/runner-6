@@ -1,2 +1,2 @@
-2026-08-21T07:50+07:00
-Run one clean production from latest main using the learned 3-reference editing grammar, new Solo Leveling source, and deterministic original 122 BPM phonk audio; render, QA, and publish artifact.
+2026-08-21T09:47+07:00
+Run one clean anime combat production from latest main using viral-pattern-learning v0.7: rank current high-performing references from observed data, analyze multi-reference grammar, select source by data + combat continuity, extract audio from the top-ranked viral reference, render a ~20s continuous readable fight with no added micro-cut montage and <=5 localized impact accents, QA, and publish artifact.
