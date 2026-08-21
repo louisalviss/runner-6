@@ -1,0 +1,23 @@
+{
+  "status": "success",
+  "run_id": 32532308621,
+  "artifact_id": 9464306583,
+  "artifact_name": "judas-remux-only-32532308621",
+  "selection": {
+    "track": "Judas — Lady Gaga",
+    "video_impacts_sec": [
+      1.666,
+      11.583,
+      19.5
+    ],
+    "selected_song_start_sec": 208.08,
+    "selected_song_end_sec": 228.08,
+    "impact_onset_scores": [
+      0.8862,
+      0.8717,
+      0.872
+    ],
+    "selection_score": 3.1633,
+    "source_duration_sec": 249.081
+  }
+}
