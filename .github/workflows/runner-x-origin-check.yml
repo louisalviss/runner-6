@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      TWEET_URL: "https://x.com/xiaoheshang2025/status/2090365030848209306?s=12"
+      TWEET_URL: "https://x.com/cryptoshan484/status/2090486831137886703?s=12"
       OUT_FILE: "runner-x-origin-check-result.json"
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +33,12 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, re, html, urllib.request, urllib.parse, time
+          import json, re, html, urllib.request, urllib.parse, time, os
           from html.parser import HTMLParser
 
-          tweet_url = "https://x.com/xiaoheshang2025/status/2090365030848209306?s=12"
-          canonical = "https://x.com/xiaoheshang2025/status/2090365030848209306"
+          tweet_url = os.environ['TWEET_URL']
+          canonical = tweet_url.split('?')[0]
+          status_id = canonical.rstrip('/').split('/')[-1]
           endpoints = {
               "x_direct": canonical,
               "twitter_direct": canonical.replace("https://x.com/", "https://twitter.com/"),
@@ -88,12 +89,14 @@ jobs:
                           m=re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']'+re.escape(prop)+r'["\']', body, re.I)
                       if m: metas[prop]=html.unescape(m.group(1))
                   item["meta"]=metas
-                  item["body_has_status_id"]="2090365030848209306" in body
+                  item["body_has_status_id"]=status_id in body
                   item["body_excerpt"]=body[:5000]
               out["probes"][name]=item
 
           o=out["probes"].get("x_oembed_official",{})
-          out["official_x_success"]=bool(o.get("ok") and o.get("tweet_text_rendered"))
+          direct=out["probes"].get("x_direct",{})
+          direct_desc=(direct.get("meta") or {}).get("og:description") or (direct.get("meta") or {}).get("twitter:description")
+          out["official_x_success"]=bool((o.get("ok") and o.get("tweet_text_rendered")) or (direct.get("ok") and direct_desc))
           with open("runner-x-origin-check-result.json","w",encoding="utf-8") as f:
               json.dump(out,f,ensure_ascii=False,indent=2)
           print(json.dumps(out,ensure_ascii=False,indent=2))
@@ -111,7 +114,7 @@ jobs:
           PY
           )
           if [ "$NEED" != "1" ]; then
-            echo "Official X oEmbed succeeded; WARP not needed."
+            echo "Official X succeeded; WARP not needed."
             exit 0
           fi
           echo "Official X access failed; attempting WARP fallback."
@@ -127,7 +130,7 @@ jobs:
           sudo warp-cli --accept-tos connect || true
           sleep 5
           python - <<'PY'
-          import json, urllib.request, urllib.parse, html, time
+          import json, urllib.request, urllib.parse, html
           from html.parser import HTMLParser
           p=json.load(open('runner-x-origin-check-result.json'))
           canonical=p['tweet_url']
