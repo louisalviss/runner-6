@@ -1,30 +1,31 @@
-name: Anime Phonk Learned Grammar Render
+name: Anime Combat Viral Pattern Render
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "anime-phonk-learned-render-trigger.txt"
-  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: runner-6-anime-phonk-learned-render
-  cancel-in-progress: true
+  group: runner-6-anime-combat-viral-pattern
+  cancel-in-progress: false
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
-      ROOT: dsh-handoff/anime-phonk-learned
-      FINAL: dsh-handoff/anime-phonk-learned/final/anime_combat_jinwoo_baran_learned_grammar.mp4
+      ROOT: dsh-handoff/anime-combat-viral
+      FINAL: dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v1.mp4
       STATUS_FILE: anime-phonk-learned-render-status.json
     steps:
       - uses: actions/checkout@v4
-      - name: Install analysis and DSH media tools
+
+      - name: Install media and analysis tools
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -32,255 +33,245 @@ jobs:
           bash scripts/setup-dsh-media-tools.sh
           mkdir -p "$ROOT" "$ROOT/final"
           cp dsh-anime-phonk-references.json "$ROOT/references.json"
+          cp dsh-anime-combat-production-candidates.json "$ROOT/source-candidates.json"
+
       - name: Publish running status
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf '{"status":"running","phase":"download_references","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > /tmp/status.json
-          C="$(base64 -w0 /tmp/status.json)"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
-          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk learned render running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime phonk learned render running [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
-      - name: Download 3 viral reference edits with DSH media helper
+          printf '{"status":"running","phase":"rank_references","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render running [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
+      - name: Rank viral references from observed data
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, math, datetime
+          from pathlib import Path
+          root=Path('dsh-handoff/anime-combat-viral')
+          data=json.load(open(root/'references.json'))
+          now=datetime.date(2026,8,21)
+          ranked=[]
+          for r in data['references']:
+              v=max(1,int(r.get('views',0))); likes=int(r.get('likes',0)); comments=int(r.get('comments',0)); shares=int(r.get('shares',0))
+              d=datetime.date.fromisoformat(r['publish_date']); age=max(1,(now-d).days); velocity=v/age
+              engagement=(likes+comments+shares)/v; share_rate=shares/v
+              score=math.log10(v)+2.5*engagement+0.12*math.log10(max(1,velocity))+0.25*share_rate
+              x=dict(r); x.update({'age_days':age,'views_per_day':round(velocity,2),'engagement_rate':round(engagement,5),'share_rate':round(share_rate,5),'data_score':round(score,5)})
+              ranked.append(x)
+          ranked.sort(key=lambda x:x['data_score'],reverse=True)
+          for i,r in enumerate(ranked,1): r['rank']=i; r['runtime_index']=i
+          out={'captured_at':data['captured_at'],'ranking_rule':data['ranking_rule'],'ranked':ranked}
+          (root/'reference-ranking.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps(out,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Download ranked viral references with DSH media helper
         run: |
           set -euo pipefail
           python - <<'PY' > /tmp/refs.tsv
           import json
-          rs=json.load(open('dsh-anime-phonk-references.json'))['references']
-          for i,r in enumerate(rs,1): print(i,r['download_url'],r.get('direct_media_fallback',''),sep='\t')
+          rs=json.load(open('dsh-handoff/anime-combat-viral/reference-ranking.json'))['ranked']
+          for r in rs: print(r['runtime_index'],r['download_url'],sep='\t')
           PY
-          while IFS=$'\t' read -r I URL FALLBACK; do
-            echo "=== ref$I $URL ==="
-            rm -rf dsh-handoff/downloads dsh-handoff/handoff.json; mkdir -p dsh-handoff/downloads "$ROOT/ref$I"
-            set +e
+          while IFS=$'\t' read -r I URL; do
+            echo "=== ranked ref$I $URL ==="
+            rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+            mkdir -p dsh-handoff/downloads "$ROOT/ref$I"
             bash scripts/dsh-download-media.sh "$URL" 720
-            CODE=$?
-            if [ "$CODE" -ne 0 ] && [ -n "$FALLBACK" ]; then
-              echo "primary failed; trying observed direct-media fallback"
-              bash scripts/dsh-download-media.sh "$FALLBACK" 720
-              CODE=$?
-            fi
-            set -e
-            [ "$CODE" -eq 0 ]
             P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
             ffmpeg -nostdin -hide_banner -y -v error -i "$P" -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 160k -movflags +faststart "$ROOT/ref$I/reference.mp4"
             test -s "$ROOT/ref$I/reference.mp4"
           done < /tmp/refs.tsv
-      - name: Analyze audio + frames + cuts + motion for all references
+
+      - name: Analyze all viral references
         run: |
           set -euo pipefail
-          for I in 1 2 3; do
+          N="$(python -c "import json;print(len(json.load(open('$ROOT/reference-ranking.json'))['ranked']))")"
+          for I in $(seq 1 "$N"); do
             python scripts/analyze-viral-edit.py "$ROOT/ref$I/reference.mp4" "$ROOT/ref$I/analysis"
           done
-      - name: Synthesize reusable 3-reference grammar
+
+      - name: Synthesize multi-reference viral combat grammar
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json,statistics
+          import json, statistics
           from pathlib import Path
-          root=Path('dsh-handoff/anime-phonk-learned')
-          refs=json.load(open(root/'references.json'))['references']
-          aa=[json.load(open(root/f'ref{i}/analysis/analysis.json')) for i in (1,2,3)]
-          bpms=[x['audio']['bpm'] for x in aa]
-          cuts=[x['visual']['median_cut_interval_sec'] for x in aa]
-          leads=[v for x in aa for v in x.get('freeze_to_impact_leads_sec',[]) if 0<=v<=.75]
-          def dens(k): return [len(x['visual'].get(k,[]))/max(.1,x['visual']['duration_sec']) for x in aa]
+          root=Path('dsh-handoff/anime-combat-viral')
+          ranking=json.load(open(root/'reference-ranking.json'))
+          n=len(ranking['ranked'])
+          aa=[json.load(open(root/f'ref{i}/analysis/analysis.json')) for i in range(1,n+1)]
+          def vals(path):
+              out=[]
+              for x in aa:
+                  cur=x
+                  for k in path: cur=cur.get(k)
+                  if cur is not None: out.append(float(cur))
+              return out
+          cuts=vals(['visual','median_cut_interval_sec']); bpms=vals(['audio','bpm']); durs=vals(['visual','duration_sec'])
+          first_imp=[x['impact_times_sec'][0] for x in aa if x.get('impact_times_sec')]
+          freeze_lengths=[]
+          for x in aa:
+              for a,b in x['visual'].get('freeze_segments_sec',[]):
+                  if b>a: freeze_lengths.append(b-a)
+          def q(v,p):
+              if not v:return None
+              s=sorted(v); idx=(len(s)-1)*p; lo=int(idx); hi=min(len(s)-1,lo+1); f=idx-lo
+              return round(s[lo]*(1-f)+s[hi]*f,3)
+          diagnostics={}
+          for k in ('flash_times_sec','zoom_times_sec','shake_times_sec','color_burst_times_sec'):
+              ds=[len(x['visual'].get(k,[]))/max(.1,x['visual']['duration_sec']) for x in aa]
+              diagnostics[k.replace('_times_sec','_density_per_sec')]=round(statistics.median(ds),3)
           g={
-            'reference_count':3,
-            'bpm_values':bpms,
-            'bpm_median':round(statistics.median(bpms),2),
-            'median_cut_intervals_sec':cuts,
-            'median_cut_interval_sec':round(statistics.median(cuts),3),
-            'freeze_lead_median_sec':round(statistics.median(leads),3) if leads else .14,
-            'flash_density_per_sec':round(statistics.median(dens('flash_times_sec')),3),
-            'zoom_density_per_sec':round(statistics.median(dens('zoom_times_sec')),3),
-            'shake_density_per_sec':round(statistics.median(dens('shake_times_sec')),3),
-            'color_burst_density_per_sec':round(statistics.median(dens('color_burst_times_sec')),3),
-            'motion_p90_median':round(statistics.median([x['visual']['motion_p90'] for x in aa]),3),
-            'rules':[
-              'readable high-salience hook before maximum cut density',
-              'alternate micro-cut clusters with hold/freeze anticipation',
-              'do not cut on every beat; reserve strongest onset/downbeat for major impacts',
-              'localize shake/flash/chromatic/color boosts to impact frames',
-              'use escalation plus a second finisher/payoff instead of flat montage',
-              'end with a short hold/reaction/pose that can bridge to opening'
+            'reference_count':n,
+            'reference_ranking':ranking['ranked'],
+            'timing_profile':{
+              'reference_duration_sec_range':[q(durs,.25),q(durs,.75)],
+              'median_cut_interval_sec_range':[q(cuts,.25),q(cuts,.75)],
+              'first_impact_median_sec':round(statistics.median(first_imp),3) if first_imp else None,
+              'freeze_duration_sec_range':[q(freeze_lengths,.25),q(freeze_lengths,.75)] if freeze_lengths else None
+            },
+            'audio_profile':{'bpm_values':bpms,'bpm_median':round(statistics.median(bpms),2) if bpms else None},
+            'effect_diagnostics_only':diagnostics,
+            'do_not_target_effect_density':True,
+            'core_rules':[
+              'hook with a recognizable high-salience combat state immediately',
+              'preserve chronological action units so attack, contact, counter and payoff remain readable',
+              'use pacing variation: movement clusters separated by readable micro-holds rather than cutting every beat',
+              'align strongest audio accents with real visual impacts, not arbitrary camera motion',
+              'escalate toward a stronger late payoff/finisher rather than a flat montage',
+              'localize post effects to a few genuine impacts; source choreography carries most of the energy'
             ],
-            'principle':'learn grammar only; do not copy reference assets, subject, text, logo or exact timing',
-            'references':refs
+            'optional_rules':[
+              'brief pre-impact anticipation when the source action naturally supports it',
+              'short aftermath/pose/reaction ending when it improves closure or looping'
+            ],
+            'outlier_rejection':[
+              'do not reproduce creator-specific logos, captions, exact shot order or exact timestamps',
+              'do not mechanically reproduce measured shake/flash/zoom densities'
+            ]
           }
-          (root/'viral_anime_phonk_grammar.json').write_text(json.dumps(g,ensure_ascii=False,indent=2),encoding='utf-8')
+          (root/'learned-combat-grammar.json').write_text(json.dumps(g,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(g,ensure_ascii=False,indent=2))
           PY
-      - name: Download NEW Solo Leveling combat source via DSH helper
-        run: |
-          set -euo pipefail
-          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json; mkdir -p dsh-handoff/downloads
-          bash scripts/dsh-download-media.sh 'https://www.youtube.com/watch?v=l9Zd8gBZC-s' 720
-          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 150 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 128k -movflags +faststart "$ROOT/final/source_jinwoo_vs_baran.mp4"
-          test -s "$ROOT/final/source_jinwoo_vs_baran.mp4"
-          python scripts/analyze-viral-edit.py "$ROOT/final/source_jinwoo_vs_baran.mp4" "$ROOT/final/source-analysis"
-      - name: Generate NEW original 122 BPM phonk test audio locally
+
+      - name: Rank and download production combat source
         run: |
           set -euo pipefail
           python - <<'PY'
-          import wave, math
-          import numpy as np
+          import json, math
           from pathlib import Path
-
-          sr=44100; bpm=122.0; dur=18.0
-          n=int(sr*dur); t=np.arange(n,dtype=np.float64)/sr
-          y=np.zeros(n,dtype=np.float64)
-          beat=60.0/bpm
-
-          def add_tone(start, length, freq, amp, decay=8.0, phase=0.0):
-              i0=max(0,int(start*sr)); i1=min(n,i0+int(length*sr))
-              if i1<=i0: return
-              tt=np.arange(i1-i0,dtype=np.float64)/sr
-              env=np.exp(-decay*tt)
-              y[i0:i1][:] += amp*np.sin(2*np.pi*freq*tt+phase)*env
-
-          def add_kick(start, amp=0.95):
-              i0=int(start*sr); L=int(.28*sr); i1=min(n,i0+L)
-              if i1<=i0:return
-              tt=np.arange(i1-i0,dtype=np.float64)/sr
-              f=145*np.exp(-10*tt)+43
-              phase=2*np.pi*np.cumsum(f)/sr
-              env=np.exp(-12*tt)
-              y[i0:i1] += amp*np.sin(phase)*env
-
-          def add_noise(start,length,amp,decay):
-              i0=int(start*sr); i1=min(n,i0+int(length*sr))
-              if i1<=i0:return
-              tt=np.arange(i1-i0,dtype=np.float64)/sr
-              rng=np.random.default_rng(int(start*10000)+7)
-              y[i0:i1] += amp*rng.standard_normal(i1-i0)*np.exp(-decay*tt)
-
-          # Four-on-the-floor pulse with half-beat syncopation.
-          k=0
-          while k*beat<dur:
-              s=k*beat
-              add_kick(s, .95 if k%4 in (0,2) else .72)
-              if k%4 in (1,3): add_noise(s,.12,.16,24)
-              k+=1
-
-          # 808/sub follows a simple minor loop.
-          notes=[55.0,55.0,49.0,46.25]
-          bar=4*beat; b=0
-          while b*bar<dur:
-              base=b*bar
-              for j,f in enumerate(notes):
-                  add_tone(base+j*beat, beat*.92, f, .34, 2.2)
-              b+=1
-
-          # Metallic cowbell lead in eighth notes, deliberately simple/original.
-          cow=[440.0,523.25,392.0,466.16,440.0,587.33,523.25,392.0]
-          step=beat/2; i=0
-          while i*step<dur:
-              s=i*step
-              f=cow[i%len(cow)]
-              add_tone(s,.085,f,.17,30)
-              add_tone(s,.07,f*1.48,.08,34,phase=.7)
-              i+=1
-
-          # Short riser/noise into every 8-beat turnaround.
-          for q in np.arange(8*beat,dur,8*beat):
-              i0=max(0,int((q-.28)*sr)); i1=min(n,int(q*sr))
-              if i1>i0:
-                  tt=np.linspace(0,1,i1-i0,endpoint=False)
-                  rng=np.random.default_rng(int(q*1000))
-                  y[i0:i1]+=0.10*rng.standard_normal(i1-i0)*(tt**2)
-
-          # Soft clip + fade edges.
-          y=np.tanh(y*1.35)
-          fade=int(.04*sr); y[:fade]*=np.linspace(0,1,fade); y[-fade:]*=np.linspace(1,0,fade)
-          peak=max(1e-9,float(np.max(np.abs(y)))); y=(y/peak*.92)
-          pcm=np.int16(np.clip(y,-1,1)*32767)
-          out=Path('dsh-handoff/anime-phonk-learned/final/original-phonk-122bpm.wav')
-          with wave.open(str(out),'wb') as w:
-              w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes(pcm.tobytes())
-          print(out, out.stat().st_size)
+          root=Path('dsh-handoff/anime-combat-viral')
+          d=json.load(open(root/'source-candidates.json')); ranked=[]
+          for r in d['candidates']:
+              v=max(1,int(r.get('social_views',0))); likes=int(r.get('likes',0)); shares=int(r.get('shares',0))
+              eng=(likes+shares)/v
+              score=math.log10(v)+2.0*eng+0.60*float(r.get('combat_continuity_score',0))+0.40*float(r.get('visual_quality_score',0))
+              x=dict(r); x['engagement_rate']=round(eng,5); x['data_score']=round(score,5); ranked.append(x)
+          ranked.sort(key=lambda x:x['data_score'],reverse=True)
+          for i,r in enumerate(ranked,1): r['rank']=i
+          out={'ranking_rule':d['ranking_rule'],'ranked':ranked,'selected':ranked[0]}
+          (root/'source-selection.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          Path('/tmp/source_url').write_text(ranked[0]['url']); Path('/tmp/source_name').write_text(ranked[0]['name'])
+          print(json.dumps(out,ensure_ascii=False,indent=2))
           PY
-          ffmpeg -nostdin -hide_banner -y -v error -i "$ROOT/final/original-phonk-122bpm.wav" -c:a libmp3lame -b:a 192k "$ROOT/final/original-phonk-122bpm.mp3"
-          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$ROOT/final/original-phonk-122bpm.mp3" | grep -q '^mp3$'
-          test "$(stat -c '%s' "$ROOT/final/original-phonk-122bpm.mp3")" -gt 100000
-          cat > "$ROOT/final/MUSIC_CREDIT.txt" <<'TXT'
-          Original 122 BPM phonk-style test beat generated deterministically by runner-6 for this transfer-learning render.
-          No external music asset was copied from the viral references.
-          TXT
-      - name: Render new combat edit from learned grammar
+          URL="$(cat /tmp/source_url)"
+          echo "Selected source: $(cat /tmp/source_name)"
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "$URL" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 420 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 160k -movflags +faststart "$ROOT/final/source.mp4"
+          test -s "$ROOT/final/source.mp4"
+          python scripts/analyze-viral-edit.py "$ROOT/final/source.mp4" "$ROOT/final/source-analysis"
+
+      - name: Extract audio from top-ranked viral reference
+        run: |
+          set -euo pipefail
+          ffmpeg -nostdin -hide_banner -y -v error -i "$ROOT/ref1/reference.mp4" -vn -c:a libmp3lame -b:a 192k "$ROOT/final/viral-reference-audio.mp3"
+          test "$(stat -c '%s' "$ROOT/final/viral-reference-audio.mp3")" -gt 50000
+
+      - name: Render readable continuous combat edit
         run: |
           set -euo pipefail
           python scripts/render-learned-anime-combat.py \
-            "$ROOT/final/source_jinwoo_vs_baran.mp4" \
-            "$ROOT/final/original-phonk-122bpm.mp3" \
-            "$ROOT/viral_anime_phonk_grammar.json" \
+            "$ROOT/final/source.mp4" \
+            "$ROOT/final/viral-reference-audio.mp3" \
+            "$ROOT/learned-combat-grammar.json" \
             "$ROOT/final/source-analysis/analysis.json" \
             "$FINAL" \
             "$ROOT/final/edit-plan.json"
           python scripts/analyze-viral-edit.py "$FINAL" "$ROOT/final/output-analysis"
-      - name: QA final video and write manifest
+
+      - name: QA mobile combat readability constraints and manifest
         run: |
           set -euo pipefail
           ffprobe -v error -show_streams -show_format -of json "$FINAL" > "$ROOT/final/ffprobe.json"
           python - <<'PY'
           import json
           from pathlib import Path
-          root=Path('dsh-handoff/anime-phonk-learned')
-          p=json.load(open(root/'final/ffprobe.json')); v=next(s for s in p['streams'] if s['codec_type']=='video'); a=next(s for s in p['streams'] if s['codec_type']=='audio'); d=float(p['format']['duration'])
+          root=Path('dsh-handoff/anime-combat-viral')
+          p=json.load(open(root/'final/ffprobe.json')); plan=json.load(open(root/'final/edit-plan.json'))
+          v=next(s for s in p['streams'] if s['codec_type']=='video'); a=next(s for s in p['streams'] if s['codec_type']=='audio'); d=float(p['format']['duration'])
           assert int(v['width'])==1080 and int(v['height'])==1920,(v['width'],v['height'])
-          assert 8.5<=d<=13.0,d
+          assert 18.0<=d<=21.0,d
           assert int(p['format']['size'])>1000000,p['format']['size']
+          assert plan['mode']=='continuous_choreography',plan['mode']
+          assert plan['post_edit_cuts_added']==0,plan['post_edit_cuts_added']
+          assert plan['post_edit_freezes_added']==0,plan['post_edit_freezes_added']
+          assert plan['impact_emphasis_count']<=5,plan['impact_emphasis_count']
           manifest={
-            'references':json.load(open(root/'references.json'))['references'],
-            'new_source':{'anime':'Solo Leveling Season 2','scene':'Jinwoo vs Demon Monarch Baran','url':'https://www.youtube.com/watch?v=l9Zd8gBZC-s','source_channel':'Crunchyroll'},
-            'final_music':{'title':'Original phonk-style test beat','artist':'runner-6 generated','bpm':122,'source':'locally synthesized; no external reference music copied'},
-            'qa':{'duration_sec':d,'width':int(v['width']),'height':int(v['height']),'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'bytes':int(p['format']['size'])}
+            'reference_ranking':json.load(open(root/'reference-ranking.json')),
+            'source_selection':json.load(open(root/'source-selection.json')),
+            'learned_grammar':json.load(open(root/'learned-combat-grammar.json')),
+            'edit_plan':plan,
+            'qa':{'duration_sec':d,'width':int(v['width']),'height':int(v['height']),'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'bytes':int(p['format']['size'])},
+            'acceptance':'technical QA passed; final visual acceptance still requires contact-sheet/mobile review'
           }
           (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
           print('QA PASS',manifest['qa'])
           PY
-      - name: Upload final study artifact
+
+      - name: Upload final viral-pattern artifact
         uses: actions/upload-artifact@v4
         with:
-          name: anime-phonk-learned-final-${{ github.run_id }}
+          name: anime-combat-viral-final-${{ github.run_id }}
           path: |
-            dsh-handoff/anime-phonk-learned/references.json
-            dsh-handoff/anime-phonk-learned/viral_anime_phonk_grammar.json
-            dsh-handoff/anime-phonk-learned/ref1/analysis/analysis.json
-            dsh-handoff/anime-phonk-learned/ref1/analysis/contact.jpg
-            dsh-handoff/anime-phonk-learned/ref2/analysis/analysis.json
-            dsh-handoff/anime-phonk-learned/ref2/analysis/contact.jpg
-            dsh-handoff/anime-phonk-learned/ref3/analysis/analysis.json
-            dsh-handoff/anime-phonk-learned/ref3/analysis/contact.jpg
-            dsh-handoff/anime-phonk-learned/final/anime_combat_jinwoo_baran_learned_grammar.mp4
-            dsh-handoff/anime-phonk-learned/final/edit-plan.json
-            dsh-handoff/anime-phonk-learned/final/ffprobe.json
-            dsh-handoff/anime-phonk-learned/final/output-analysis/analysis.json
-            dsh-handoff/anime-phonk-learned/final/output-analysis/contact.jpg
-            dsh-handoff/anime-phonk-learned/final/original-phonk-122bpm.mp3
-            dsh-handoff/anime-phonk-learned/final/MUSIC_CREDIT.txt
-            dsh-handoff/anime-phonk-learned/final/SOURCE_MANIFEST.json
-          retention-days: 2
-          compression-level: 0
+            dsh-handoff/anime-combat-viral/reference-ranking.json
+            dsh-handoff/anime-combat-viral/learned-combat-grammar.json
+            dsh-handoff/anime-combat-viral/source-selection.json
+            dsh-handoff/anime-combat-viral/ref*/analysis/analysis.json
+            dsh-handoff/anime-combat-viral/ref*/analysis/contact.jpg
+            dsh-handoff/anime-combat-viral/final/source-analysis/analysis.json
+            dsh-handoff/anime-combat-viral/final/edit-plan.json
+            dsh-handoff/anime-combat-viral/final/output-analysis/analysis.json
+            dsh-handoff/anime-combat-viral/final/output-analysis/contact.jpg
+            dsh-handoff/anime-combat-viral/final/ffprobe.json
+            dsh-handoff/anime-combat-viral/final/SOURCE_MANIFEST.json
+            dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v1.mp4
           if-no-files-found: error
+          retention-days: 2
+
       - name: Publish final status
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python - <<'PY' > /tmp/status.json
-          import json,os
-          from pathlib import Path
-          root=Path('dsh-handoff/anime-phonk-learned'); v=root/'final/anime_combat_jinwoo_baran_learned_grammar.mp4'
-          d={'status':'success' if v.exists() and v.stat().st_size>1000000 else 'error','phase':'done','run_id':os.environ['GITHUB_RUN_ID'],'artifact_present':bool(v.exists() and v.stat().st_size>1000000)}
-          if v.exists(): d['bytes']=v.stat().st_size
-          for n in ('viral_anime_phonk_grammar.json','final/edit-plan.json','final/ffprobe.json','final/SOURCE_MANIFEST.json'):
-            p=root/n
-            if p.exists():
-              try:d[n.replace('/','_')]=json.loads(p.read_text())
-              except:pass
-          print(json.dumps(d,ensure_ascii=False,separators=(',',':')))
-          PY
-          C="$(base64 -w0 /tmp/status.json)"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
-          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime phonk learned render status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Update anime phonk learned render status [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+          if [ -s "$FINAL" ]; then STATUS=success; PRESENT=true; else STATUS=error; PRESENT=false; fi
+          printf '{"status":"%s","phase":"done","run_id":"%s","artifact_present":%s,"flow":"viral-pattern-learning-v0.7"}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
