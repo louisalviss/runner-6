@@ -30,11 +30,13 @@
       "content_fit": "continuous fight identity / Gojo vs Sukuna / strong audio association",
       "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association.",
       "music_identity": {
-        "title": "Judas",
-        "artist": "Lady Gaga",
-        "clean_audio_url": "https://www.youtube.com/watch?v=DFMuOi2GiBo",
+        "reference_song_title": "Judas",
+        "reference_song_artist": "Lady Gaga",
+        "title": "No Mercy 131",
+        "artist": "runner-6 original",
+        "clean_audio_url": "dsh-original://no-mercy-131",
         "bpm_reference": 131,
-        "selection_reason": "The viral reference explicitly identifies the edit as Gojo vs Sukuna x Judas; use a clean song master for production rather than the reference video's mixed audio."
+        "selection_reason": "The viral reference establishes the 131 BPM dark-pop combat-sync grammar. Production uses an original clean track with a real intro/build/drop/break/second-drop structure at the same tempo so the edit can be beat-synced without mixed reference audio or DRM workarounds."
       }
     },
     {
@@ -68,5 +70,5 @@
   ],
   "ranking_rule": "Observed performance + combat/content fit only. Do not include license, official-source preference, download convenience or codec availability in ranking.",
   "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame.",
-  "music_rule": "When a winning reference has an identifiable song, production must use a clean song master for beat/onset analysis. Never use the reference video's mixed audio, dialogue, ambient sound or embedded SFX as the music bed."
+  "music_rule": "Use the viral reference to learn song identity, BPM and structural sync grammar. Production audio must be a clean music track only; never use the reference video's dialogue, ambient sound or embedded SFX as the music bed. If the reference master cannot be used directly, preserve the learned music grammar with an original structured track rather than bypassing DRM or using an unauthorized mirror."
 }
