@@ -1,0 +1,2 @@
+2026-08-22 remux-only
+Use existing edited anime combat video artifact from run 32442645181. Download clean Judas — Lady Gaga audio through DSH, pick a 20s window aligned to the existing edit impacts, replace audio only, preserve video bitstream, and upload the MP4 artifact.
