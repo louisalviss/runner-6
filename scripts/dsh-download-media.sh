@@ -45,7 +45,8 @@ PY
 }
 
 # TikTok/TikWM: resolve the current media URL through TikWM's JSON API first.
-# Static /video/media/... guesses can expire or return 400/403 on hosted runners.
+# HTTP 200 is not sufficient: TikWM can return an application-level error or
+# an empty data object. Validate the JSON before treating an API call as good.
 if [ "$MODE" = video ] && [[ "$URL" == *tiktok.com* || "$URL" == *tikwm.com/video/* ]]; then
   SOURCE="$URL"
   if [[ "$SOURCE" == *tikwm.com/video/* ]]; then
@@ -53,41 +54,27 @@ if [ "$MODE" = video ] && [[ "$URL" == *tiktok.com* || "$URL" == *tikwm.com/vide
     [ -n "$ID" ] && SOURCE="$ID"
   fi
   API_JSON="$(mktemp)"
+  MEDIA_TMP="$(mktemp)"
   UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/136 Safari/537.36'
+  WARP_CONNECTED=0
+
   tikwm_api() {
-    curl -fsS --retry 2 --retry-delay 1 --max-time 45 \
+    : > "$API_JSON"
+    curl -fsS --retry 1 --retry-delay 1 --max-time 45 \
       -A "$UA" -H 'Accept: application/json, text/plain, */*' \
       -X POST -d "url=$SOURCE" -d 'hd=1' \
       'https://www.tikwm.com/api/' -o "$API_JSON"
   }
-  set +e
-  tikwm_api
-  API_CODE=$?
-  set -e
-  WARP_CONNECTED=0
-  if [ "$API_CODE" -ne 0 ]; then
-    echo 'TikWM API direct request blocked; retrying through Cloudflare WARP.' >&2
-    set +e
-    bash scripts/setup-cloudflare-warp.sh >&2
-    WARP_CODE=$?
-    set -e
-    if [ "$WARP_CODE" -eq 0 ]; then
-      WARP_CONNECTED=1
-      set +e
-      tikwm_api
-      API_CODE=$?
-      set -e
-    fi
-  fi
-  if [ "$API_CODE" -ne 0 ]; then
-    [ "$WARP_CONNECTED" -eq 1 ] && warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
-    echo 'TikWM API resolution failed.' >&2
-    exit "$API_CODE"
-  fi
-  MEDIA_URL="$(python - "$API_JSON" <<'PY'
-import json,sys
-p=json.load(open(sys.argv[1]))
-if p.get('code') != 0 or not p.get('data'):
+
+  validate_tikwm_json() {
+    python - "$API_JSON" "$MEDIA_TMP" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    p=json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(2)
+if p.get('code') != 0 or not isinstance(p.get('data'), dict):
     raise SystemExit(2)
 d=p['data']
 u=d.get('hdplay') or d.get('play')
@@ -95,22 +82,90 @@ if not u:
     raise SystemExit(3)
 if u.startswith('/'):
     u='https://www.tikwm.com'+u
-print(u)
+Path(sys.argv[2]).write_text(u,encoding='utf-8')
 PY
-  )"
+  }
+
+  resolve_once() {
+    set +e
+    tikwm_api
+    local c=$?
+    if [ "$c" -eq 0 ]; then
+      validate_tikwm_json
+      c=$?
+    fi
+    set -e
+    return "$c"
+  }
+
+  RESOLVE_CODE=1
+  if resolve_once; then
+    RESOLVE_CODE=0
+  else
+    echo 'TikWM direct resolution unavailable; retrying with fresh Cloudflare WARP egress.' >&2
+    for ATTEMPT in 1 2 3; do
+      [ "$WARP_CONNECTED" -eq 1 ] && warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+      WARP_CONNECTED=0
+      echo "TikWM WARP resolution attempt $ATTEMPT/3" >&2
+      set +e
+      bash scripts/setup-cloudflare-warp.sh >&2
+      WARP_CODE=$?
+      set -e
+      if [ "$WARP_CODE" -ne 0 ]; then
+        sleep 2
+        continue
+      fi
+      WARP_CONNECTED=1
+      if resolve_once; then
+        RESOLVE_CODE=0
+        break
+      fi
+      echo 'TikWM API responded but did not provide playable media on this egress.' >&2
+      sleep 2
+    done
+  fi
+
+  if [ "$RESOLVE_CODE" -ne 0 ] || [ ! -s "$MEDIA_TMP" ]; then
+    [ "$WARP_CONNECTED" -eq 1 ] && warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    rm -f "$API_JSON" "$MEDIA_TMP"
+    echo 'TikWM API resolution failed after validated retries.' >&2
+    exit 2
+  fi
+
+  MEDIA_URL="$(cat "$MEDIA_TMP")"
   OUT="dsh-handoff/downloads/tiktok_$(date +%s%N).mp4"
   set +e
-  curl -fL --retry 2 --retry-delay 1 --max-time 120 \
+  curl -fL --retry 3 --retry-delay 2 --max-time 120 \
     -A "$UA" -e 'https://www.tikwm.com/' -H 'Accept: video/*,*/*;q=0.8' \
     "$MEDIA_URL" -o "$OUT"
   CODE=$?
   set -e
+
+  if [ "$CODE" -ne 0 ] || [ ! -s "$OUT" ]; then
+    echo 'TikWM resolved media download failed; trying one fresh WARP media fetch.' >&2
+    [ "$WARP_CONNECTED" -eq 1 ] && warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    WARP_CONNECTED=0
+    set +e
+    bash scripts/setup-cloudflare-warp.sh >&2
+    WARP_CODE=$?
+    set -e
+    if [ "$WARP_CODE" -eq 0 ]; then
+      WARP_CONNECTED=1
+      set +e
+      curl -fL --retry 3 --retry-delay 2 --max-time 120 \
+        -A "$UA" -e 'https://www.tikwm.com/' -H 'Accept: video/*,*/*;q=0.8' \
+        "$MEDIA_URL" -o "$OUT"
+      CODE=$?
+      set -e
+    fi
+  fi
+
   [ "$WARP_CONNECTED" -eq 1 ] && warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+  rm -f "$API_JSON" "$MEDIA_TMP"
   if [ "$CODE" -ne 0 ] || [ ! -s "$OUT" ]; then
     echo 'TikWM resolved media download failed.' >&2
     exit "${CODE:-1}"
   fi
-  # Reject HTML/challenge bodies masquerading as media.
   if ! ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$OUT" >/dev/null 2>&1; then
     echo 'TikWM returned a non-video payload.' >&2
     exit 4
