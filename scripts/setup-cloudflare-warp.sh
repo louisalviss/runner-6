@@ -15,14 +15,21 @@ fi
 
 sudo systemctl start warp-svc || true
 
-# Consumer WARP registration is ephemeral on GitHub-hosted runners.
+# GitHub-hosted jobs may call this helper multiple times in the same VM.
+# Always clear a previous disconnected consumer registration before creating
+# the next ephemeral one; otherwise warp-cli exits with "Old registration is
+# still around" on the second media download.
+warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+warp-cli --accept-tos registration delete >/dev/null 2>&1 || true
+sleep 1
+
 set +e
 warp-cli --accept-tos registration new >/tmp/warp-register.log 2>&1
 REG=$?
 set -e
-# Registration may already exist if package/service created state.
 if [ "$REG" -ne 0 ]; then
-  grep -qiE 'already|exists|registered' /tmp/warp-register.log || { cat /tmp/warp-register.log >&2; exit "$REG"; }
+  cat /tmp/warp-register.log >&2
+  exit "$REG"
 fi
 rm -f /tmp/warp-register.log
 
