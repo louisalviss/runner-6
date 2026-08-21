@@ -119,35 +119,100 @@ jobs:
           ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 150 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 128k -movflags +faststart "$ROOT/final/source_jinwoo_vs_baran.mp4"
           test -s "$ROOT/final/source_jinwoo_vs_baran.mp4"
           python scripts/analyze-viral-edit.py "$ROOT/final/source_jinwoo_vs_baran.mp4" "$ROOT/final/source-analysis"
-      - name: Download NEW CC phonk audio via DSH helper
+      - name: Generate NEW original 122 BPM phonk test audio locally
         run: |
           set -euo pipefail
-          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json; mkdir -p dsh-handoff/downloads
-          AUDIO='https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-brazilian-phonk.mp3#dsh-audio'
-          set +e
-          bash scripts/dsh-download-media.sh "$AUDIO" 720
-          CODE=$?
-          set -e
-          if [ "$CODE" -eq 0 ]; then
-            P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-            cp "$P" "$ROOT/final/brazilian-phonk-alex-productions.mp3"
-          else
-            echo 'DSH generic extractor could not fetch direct CC MP3; using the publisher-provided direct download URL.'
-            curl -fL --retry 2 --max-time 90 -o "$ROOT/final/brazilian-phonk-alex-productions.mp3" 'https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-brazilian-phonk.mp3'
-          fi
-          test -s "$ROOT/final/brazilian-phonk-alex-productions.mp3"
+          python - <<'PY'
+          import wave, math
+          import numpy as np
+          from pathlib import Path
+
+          sr=44100; bpm=122.0; dur=18.0
+          n=int(sr*dur); t=np.arange(n,dtype=np.float64)/sr
+          y=np.zeros(n,dtype=np.float64)
+          beat=60.0/bpm
+
+          def add_tone(start, length, freq, amp, decay=8.0, phase=0.0):
+              i0=max(0,int(start*sr)); i1=min(n,i0+int(length*sr))
+              if i1<=i0: return
+              tt=np.arange(i1-i0,dtype=np.float64)/sr
+              env=np.exp(-decay*tt)
+              y[i0:i1][:] += amp*np.sin(2*np.pi*freq*tt+phase)*env
+
+          def add_kick(start, amp=0.95):
+              i0=int(start*sr); L=int(.28*sr); i1=min(n,i0+L)
+              if i1<=i0:return
+              tt=np.arange(i1-i0,dtype=np.float64)/sr
+              f=145*np.exp(-10*tt)+43
+              phase=2*np.pi*np.cumsum(f)/sr
+              env=np.exp(-12*tt)
+              y[i0:i1] += amp*np.sin(phase)*env
+
+          def add_noise(start,length,amp,decay):
+              i0=int(start*sr); i1=min(n,i0+int(length*sr))
+              if i1<=i0:return
+              tt=np.arange(i1-i0,dtype=np.float64)/sr
+              rng=np.random.default_rng(int(start*10000)+7)
+              y[i0:i1] += amp*rng.standard_normal(i1-i0)*np.exp(-decay*tt)
+
+          # Four-on-the-floor pulse with half-beat syncopation.
+          k=0
+          while k*beat<dur:
+              s=k*beat
+              add_kick(s, .95 if k%4 in (0,2) else .72)
+              if k%4 in (1,3): add_noise(s,.12,.16,24)
+              k+=1
+
+          # 808/sub follows a simple minor loop.
+          notes=[55.0,55.0,49.0,46.25]
+          bar=4*beat; b=0
+          while b*bar<dur:
+              base=b*bar
+              for j,f in enumerate(notes):
+                  add_tone(base+j*beat, beat*.92, f, .34, 2.2)
+              b+=1
+
+          # Metallic cowbell lead in eighth notes, deliberately simple/original.
+          cow=[440.0,523.25,392.0,466.16,440.0,587.33,523.25,392.0]
+          step=beat/2; i=0
+          while i*step<dur:
+              s=i*step
+              f=cow[i%len(cow)]
+              add_tone(s,.085,f,.17,30)
+              add_tone(s,.07,f*1.48,.08,34,phase=.7)
+              i+=1
+
+          # Short riser/noise into every 8-beat turnaround.
+          for q in np.arange(8*beat,dur,8*beat):
+              i0=max(0,int((q-.28)*sr)); i1=min(n,int(q*sr))
+              if i1>i0:
+                  tt=np.linspace(0,1,i1-i0,endpoint=False)
+                  rng=np.random.default_rng(int(q*1000))
+                  y[i0:i1]+=0.10*rng.standard_normal(i1-i0)*(tt**2)
+
+          # Soft clip + fade edges.
+          y=np.tanh(y*1.35)
+          fade=int(.04*sr); y[:fade]*=np.linspace(0,1,fade); y[-fade:]*=np.linspace(1,0,fade)
+          peak=max(1e-9,float(np.max(np.abs(y)))); y=(y/peak*.92)
+          pcm=np.int16(np.clip(y,-1,1)*32767)
+          out=Path('dsh-handoff/anime-phonk-learned/final/original-phonk-122bpm.wav')
+          with wave.open(str(out),'wb') as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes(pcm.tobytes())
+          print(out, out.stat().st_size)
+          PY
+          ffmpeg -nostdin -hide_banner -y -v error -i "$ROOT/final/original-phonk-122bpm.wav" -c:a libmp3lame -b:a 192k "$ROOT/final/original-phonk-122bpm.mp3"
+          ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$ROOT/final/original-phonk-122bpm.mp3" | grep -q '^mp3$'
+          test "$(stat -c '%s' "$ROOT/final/original-phonk-122bpm.mp3")" -gt 100000
           cat > "$ROOT/final/MUSIC_CREDIT.txt" <<'TXT'
-          Brazilian Phonk by Alex-Productions | https://onsound.eu/
-          Royalty Free Music by https://www.free-stock-music.com
-          Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
-          https://creativecommons.org/licenses/by/3.0/deed.en_US
+          Original 122 BPM phonk-style test beat generated deterministically by runner-6 for this transfer-learning render.
+          No external music asset was copied from the viral references.
           TXT
       - name: Render new combat edit from learned grammar
         run: |
           set -euo pipefail
           python scripts/render-learned-anime-combat.py \
             "$ROOT/final/source_jinwoo_vs_baran.mp4" \
-            "$ROOT/final/brazilian-phonk-alex-productions.mp3" \
+            "$ROOT/final/original-phonk-122bpm.mp3" \
             "$ROOT/viral_anime_phonk_grammar.json" \
             "$ROOT/final/source-analysis/analysis.json" \
             "$FINAL" \
@@ -168,7 +233,7 @@ jobs:
           manifest={
             'references':json.load(open(root/'references.json'))['references'],
             'new_source':{'anime':'Solo Leveling Season 2','scene':'Jinwoo vs Demon Monarch Baran','url':'https://www.youtube.com/watch?v=l9Zd8gBZC-s','source_channel':'Crunchyroll'},
-            'final_music':{'title':'Brazilian Phonk','artist':'Alex-Productions','bpm_listed':122,'download_url':'https://www.free-stock-music.com/music/alex-productions/mp3/alex-productions-brazilian-phonk.mp3','license_page':'https://www.free-stock-music.com/alex-productions-brazilian-phonk.html','license':'CC BY 3.0'},
+            'final_music':{'title':'Original phonk-style test beat','artist':'runner-6 generated','bpm':122,'source':'locally synthesized; no external reference music copied'},
             'qa':{'duration_sec':d,'width':int(v['width']),'height':int(v['height']),'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'bytes':int(p['format']['size'])}
           }
           (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -192,6 +257,7 @@ jobs:
             dsh-handoff/anime-phonk-learned/final/ffprobe.json
             dsh-handoff/anime-phonk-learned/final/output-analysis/analysis.json
             dsh-handoff/anime-phonk-learned/final/output-analysis/contact.jpg
+            dsh-handoff/anime-phonk-learned/final/original-phonk-122bpm.mp3
             dsh-handoff/anime-phonk-learned/final/MUSIC_CREDIT.txt
             dsh-handoff/anime-phonk-learned/final/SOURCE_MANIFEST.json
           retention-days: 2
