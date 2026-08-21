@@ -1,4 +1,4 @@
-name: Anime Combat Viral Pattern Render
+name: Anime Combat Viral Beat-Sync Render
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 60
     env:
       ROOT: dsh-handoff/anime-combat-viral
-      FINAL: dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v1.mp4
+      FINAL: dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v2.mp4
       STATUS_FILE: anime-phonk-learned-render-status.json
     steps:
       - uses: actions/checkout@v4
@@ -40,13 +40,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf '{"status":"running","phase":"rank_references","run_id":"%s","artifact_present":false}\n' "$GITHUB_RUN_ID" > /tmp/status.json
+          printf '{"status":"running","phase":"rank_references","run_id":"%s","artifact_present":false,"flow":"viral-pattern-learning-v0.8-beat-sync"}\n' "$GITHUB_RUN_ID" > /tmp/status.json
           C="$(base64 -w0 /tmp/status.json)"
           S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
           if [ -n "$S" ]; then
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat beat-sync render running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
           else
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render running [skip ci]' -f content="$C" -f branch=main >/dev/null
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat beat-sync render running [skip ci]' -f content="$C" -f branch=main >/dev/null
           fi
 
       - name: Rank viral references from observed data
@@ -68,7 +68,7 @@ jobs:
               ranked.append(x)
           ranked.sort(key=lambda x:x['data_score'],reverse=True)
           for i,r in enumerate(ranked,1): r['rank']=i; r['runtime_index']=i
-          out={'captured_at':data['captured_at'],'ranking_rule':data['ranking_rule'],'ranked':ranked}
+          out={'captured_at':data['captured_at'],'ranking_rule':data['ranking_rule'],'music_rule':data.get('music_rule'),'ranked':ranked}
           (root/'reference-ranking.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
           print(json.dumps(out,ensure_ascii=False,indent=2))
           PY
@@ -87,7 +87,7 @@ jobs:
             mkdir -p dsh-handoff/downloads "$ROOT/ref$I"
             bash scripts/dsh-download-media.sh "$URL" 720
             P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-            ffmpeg -nostdin -hide_banner -y -v error -i "$P" -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -b:a 160k -movflags +faststart "$ROOT/ref$I/reference.mp4"
+            ffmpeg -nostdin -hide_banner -y -v error -i "$P" -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 19 -c:a aac -ar 48000 -b:a 160k -movflags +faststart "$ROOT/ref$I/reference.mp4"
             test -s "$ROOT/ref$I/reference.mp4"
           done < /tmp/refs.tsv
 
@@ -145,10 +145,10 @@ jobs:
             'core_rules':[
               'hook with a recognizable high-salience combat state immediately',
               'preserve chronological action units so attack, contact, counter and payoff remain readable',
-              'use pacing variation: movement clusters separated by readable micro-holds rather than cutting every beat',
-              'align strongest audio accents with real visual impacts, not arbitrary camera motion',
+              'use pacing variation rather than cutting on every beat',
+              'align strongest music beats/onsets with real visual impacts',
               'escalate toward a stronger late payoff/finisher rather than a flat montage',
-              'localize post effects to a few genuine impacts; source choreography carries most of the energy'
+              'localize post effects to genuine impacts; source choreography carries most of the energy'
             ],
             'optional_rules':[
               'brief pre-impact anticipation when the source action naturally supports it',
@@ -156,7 +156,8 @@ jobs:
             ],
             'outlier_rejection':[
               'do not reproduce creator-specific logos, captions, exact shot order or exact timestamps',
-              'do not mechanically reproduce measured shake/flash/zoom densities'
+              'do not mechanically reproduce measured shake/flash/zoom densities',
+              'do not use mixed reference-video audio as the production music bed'
             ]
           }
           (root/'learned-combat-grammar.json').write_text(json.dumps(g,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -189,29 +190,69 @@ jobs:
           mkdir -p dsh-handoff/downloads
           bash scripts/dsh-download-media.sh "$URL" 720
           P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 420 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -b:a 160k -movflags +faststart "$ROOT/final/source.mp4"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 420 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -ar 48000 -b:a 160k -movflags +faststart "$ROOT/final/source.mp4"
           test -s "$ROOT/final/source.mp4"
           python scripts/analyze-viral-edit.py "$ROOT/final/source.mp4" "$ROOT/final/source-analysis"
 
-      - name: Extract audio from top-ranked viral reference
+      - name: Select and download clean song master from viral music identity
         run: |
           set -euo pipefail
-          ffmpeg -nostdin -hide_banner -y -v error -i "$ROOT/ref1/reference.mp4" -vn -c:a libmp3lame -b:a 192k "$ROOT/final/viral-reference-audio.mp3"
-          test "$(stat -c '%s' "$ROOT/final/viral-reference-audio.mp3")" -gt 50000
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dsh-handoff/anime-combat-viral')
+          rs=json.load(open(root/'reference-ranking.json'))['ranked']
+          candidates=[r for r in rs if r.get('music_identity',{}).get('clean_audio_url')]
+          if not candidates:
+              raise SystemExit('no identifiable clean music source in ranked references')
+          pick=candidates[0]
+          m=pick['music_identity']
+          out={
+            'reference_rank':pick['rank'],
+            'reference_creator':pick['creator'],
+            'reference_title':pick['caption_or_title'],
+            'title':m['title'],
+            'artist':m['artist'],
+            'clean_audio_url':m['clean_audio_url'],
+            'bpm_reference':m.get('bpm_reference'),
+            'selection_reason':m.get('selection_reason')
+          }
+          (root/'music-selection.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          Path('/tmp/music_url').write_text(m['clean_audio_url'])
+          Path('/tmp/music_title').write_text(f"{m['title']} — {m['artist']}")
+          print(json.dumps(out,ensure_ascii=False,indent=2))
+          PY
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "$(cat /tmp/music_url)#dsh-audio" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -vn -ar 48000 -ac 2 -c:a pcm_s16le "$ROOT/final/music-master.wav"
+          test "$(stat -c '%s' "$ROOT/final/music-master.wav")" -gt 1000000
+          ffprobe -v error -show_streams -show_format -of json "$ROOT/final/music-master.wav" > "$ROOT/final/music-master-ffprobe.json"
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/anime-combat-viral/final/music-master-ffprobe.json'))
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration'])
+          assert int(a['sample_rate'])==48000,a['sample_rate']
+          assert d>30,d
+          print('CLEAN MUSIC PASS',a['codec_name'],a['sample_rate'],d)
+          PY
 
-      - name: Render readable continuous combat edit
+      - name: Render beat-synced readable combat edit
         run: |
           set -euo pipefail
           python scripts/render-learned-anime-combat.py \
             "$ROOT/final/source.mp4" \
-            "$ROOT/final/viral-reference-audio.mp3" \
+            "$ROOT/final/music-master.wav" \
             "$ROOT/learned-combat-grammar.json" \
             "$ROOT/final/source-analysis/analysis.json" \
             "$FINAL" \
-            "$ROOT/final/edit-plan.json"
+            "$ROOT/final/edit-plan.json" \
+            --music-title "$(cat /tmp/music_title)"
           python scripts/analyze-viral-edit.py "$FINAL" "$ROOT/final/output-analysis"
 
-      - name: QA mobile combat readability constraints and manifest
+      - name: QA clean audio and beat synchronization
         run: |
           set -euo pipefail
           ffprobe -v error -show_streams -show_format -of json "$FINAL" > "$ROOT/final/ffprobe.json"
@@ -220,32 +261,50 @@ jobs:
           from pathlib import Path
           root=Path('dsh-handoff/anime-combat-viral')
           p=json.load(open(root/'final/ffprobe.json')); plan=json.load(open(root/'final/edit-plan.json'))
-          v=next(s for s in p['streams'] if s['codec_type']=='video'); a=next(s for s in p['streams'] if s['codec_type']=='audio'); d=float(p['format']['duration'])
+          v=next(s for s in p['streams'] if s['codec_type']=='video')
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration'])
           assert int(v['width'])==1080 and int(v['height'])==1920,(v['width'],v['height'])
-          assert 18.0<=d<=21.0,d
+          assert 19.90<=d<=20.10,d
           assert int(p['format']['size'])>1000000,p['format']['size']
-          assert plan['mode']=='continuous_choreography',plan['mode']
-          assert plan['post_edit_cuts_added']==0,plan['post_edit_cuts_added']
-          assert plan['post_edit_freezes_added']==0,plan['post_edit_freezes_added']
-          assert plan['impact_emphasis_count']<=5,plan['impact_emphasis_count']
+          assert int(a['sample_rate'])==48000,a['sample_rate']
+          assert plan['mode']=='beat_synced_choreography',plan['mode']
+          assert plan['music']['track_type']=='clean_song_master',plan['music']
+          assert plan['music']['source_audio_in_mix'] is False,plan['music']
+          assert plan['music']['synthetic_sfx_in_mix'] is False,plan['music']
+          assert plan['impact_sync_count']>=3,plan['impact_sync_count']
+          assert plan['max_beat_sync_error_sec']<=0.035,plan['max_beat_sync_error_sec']
+          assert plan['max_speed_deviation_from_1x']<=0.35,plan['max_speed_deviation_from_1x']
           manifest={
             'reference_ranking':json.load(open(root/'reference-ranking.json')),
+            'music_selection':json.load(open(root/'music-selection.json')),
             'source_selection':json.load(open(root/'source-selection.json')),
             'learned_grammar':json.load(open(root/'learned-combat-grammar.json')),
             'edit_plan':plan,
-            'qa':{'duration_sec':d,'width':int(v['width']),'height':int(v['height']),'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'bytes':int(p['format']['size'])},
-            'acceptance':'technical QA passed; final visual acceptance still requires contact-sheet/mobile review'
+            'qa':{
+              'duration_sec':d,
+              'width':int(v['width']),
+              'height':int(v['height']),
+              'video_codec':v['codec_name'],
+              'audio_codec':a['codec_name'],
+              'audio_sample_rate':int(a['sample_rate']),
+              'bytes':int(p['format']['size']),
+              'impact_sync_count':plan['impact_sync_count'],
+              'max_beat_sync_error_sec':plan['max_beat_sync_error_sec']
+            },
+            'acceptance':'clean song-only audio + deterministic beat-sync QA passed; final visual acceptance still requires contact-sheet/mobile review'
           }
           (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
           print('QA PASS',manifest['qa'])
           PY
 
-      - name: Upload final viral-pattern artifact
+      - name: Upload final beat-sync artifact
         uses: actions/upload-artifact@v4
         with:
-          name: anime-combat-viral-final-${{ github.run_id }}
+          name: anime-combat-beat-sync-final-${{ github.run_id }}
           path: |
             dsh-handoff/anime-combat-viral/reference-ranking.json
+            dsh-handoff/anime-combat-viral/music-selection.json
             dsh-handoff/anime-combat-viral/learned-combat-grammar.json
             dsh-handoff/anime-combat-viral/source-selection.json
             dsh-handoff/anime-combat-viral/ref*/analysis/analysis.json
@@ -255,8 +314,9 @@ jobs:
             dsh-handoff/anime-combat-viral/final/output-analysis/analysis.json
             dsh-handoff/anime-combat-viral/final/output-analysis/contact.jpg
             dsh-handoff/anime-combat-viral/final/ffprobe.json
+            dsh-handoff/anime-combat-viral/final/music-master-ffprobe.json
             dsh-handoff/anime-combat-viral/final/SOURCE_MANIFEST.json
-            dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v1.mp4
+            dsh-handoff/anime-combat-viral/final/anime_combat_viral_pattern_v2.mp4
           if-no-files-found: error
           retention-days: 2
 
@@ -267,11 +327,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ -s "$FINAL" ]; then STATUS=success; PRESENT=true; else STATUS=error; PRESENT=false; fi
-          printf '{"status":"%s","phase":"done","run_id":"%s","artifact_present":%s,"flow":"viral-pattern-learning-v0.7"}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > /tmp/status.json
+          printf '{"status":"%s","phase":"done","run_id":"%s","artifact_present":%s,"flow":"viral-pattern-learning-v0.8-beat-sync"}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > /tmp/status.json
           C="$(base64 -w0 /tmp/status.json)"
           S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
           if [ -n "$S" ]; then
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat beat-sync render status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
           else
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat viral render status [skip ci]' -f content="$C" -f branch=main >/dev/null
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Anime combat beat-sync render status [skip ci]' -f content="$C" -f branch=main >/dev/null
           fi
