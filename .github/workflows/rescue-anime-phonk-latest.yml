@@ -1,0 +1,30 @@
+name: Rescue Anime Phonk Latest Head
+
+on:
+  workflow_run:
+    workflows: ["Anime Phonk Learned Grammar Render"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  dispatch-latest:
+    if: github.event.workflow_run.head_sha == '10b685d65c67ea8ef395afb4ae861fb201d961cb'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record rescue trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"dispatching","source_run":"%s","source_sha":"%s"}\n' '${{ github.event.workflow_run.id }}' '${{ github.event.workflow_run.head_sha }}' > /tmp/rescue.json
+          C="$(base64 -w0 /tmp/rescue.json)"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/anime-phonk-rescue-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/anime-phonk-rescue-status.json" -f message='Anime phonk rescue dispatch [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/anime-phonk-rescue-status.json" -f message='Anime phonk rescue dispatch [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+      - name: Dispatch production from latest main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run anime-phonk-learned-render.yml --repo "$GITHUB_REPOSITORY" --ref main
