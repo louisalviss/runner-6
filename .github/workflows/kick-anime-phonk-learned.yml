@@ -9,17 +9,24 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      - name: Publish dispatcher status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":"%s","sha":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > /tmp/kick.json
+          C="$(base64 -w0 /tmp/kick.json)"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/anime-phonk-kick-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/anime-phonk-kick-status.json" -f message='Anime phonk dispatcher status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/anime-phonk-kick-status.json" -f message='Anime phonk dispatcher status [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
       - name: Dispatch production workflow at latest main
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo 'dispatch-v2'
           gh workflow run anime-phonk-learned-render.yml --repo "$GITHUB_REPOSITORY" --ref main
           echo 'production workflow dispatched'
