@@ -5,7 +5,11 @@ on:
     branches:
       - fix/dsh-ytsearch-audio
     paths:
-      - 'scripts/dsh-download-audio-search.sh'
+      - 'scripts/dsh-download-media.sh'
+      - '.github/workflows/test-dsh-audio-search.yml'
+  pull_request:
+    paths:
+      - 'scripts/dsh-download-media.sh'
       - '.github/workflows/test-dsh-audio-search.yml'
   workflow_dispatch:
 
@@ -23,12 +27,12 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
           bash scripts/setup-dsh-media-tools.sh
 
-      - name: Resolve Judas by name through DSH
+      - name: Resolve Judas by name through production DSH downloader
         run: |
           set -euo pipefail
           rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
           mkdir -p dsh-handoff/downloads
-          bash scripts/dsh-download-audio-search.sh 'Lady Gaga Judas official audio'
+          bash scripts/dsh-download-media.sh 'ytsearch1:Lady Gaga Judas official audio#dsh-audio' 720
           P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
           ffprobe -v error -show_streams -show_format -of json "$P" > /tmp/probe.json
           python - <<'PY'
