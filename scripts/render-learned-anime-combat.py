@@ -110,6 +110,14 @@ def has_audio(path):
     return any(s.get('codec_type')=='audio' for s in p.get('streams',[]))
 
 
+def audio_info(path):
+    p=probe(path)
+    s=next(s for s in p.get('streams',[]) if s.get('codec_type')=='audio')
+    sr=int(s.get('sample_rate') or 48000)
+    dur=float(s.get('duration') or p['format'].get('duration') or 0)
+    return sr,dur
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('source'); ap.add_argument('music'); ap.add_argument('grammar'); ap.add_argument('source_analysis'); ap.add_argument('output'); ap.add_argument('plan')
@@ -154,23 +162,34 @@ def main():
     if frame_i < int(17*FPS): raise SystemExit(f'window too short: {duration:.2f}s')
     synth_sfx(sfx,duration,emphasis)
 
-    inputs=['-i',str(silent),'-stream_loop','-1','-i',str(music)]
+    msr,mdur=audio_info(music)
+    loop_samples=max(1,int(round(msr*mdur)))
+    inputs=['-i',str(silent),'-i',str(music)]
+    music_chain=(f'[1:a]aloop=loop=-1:size={loop_samples},atrim=duration={duration:.3f},'
+                 f'asetpts=PTS-STARTPTS,volume=.88,loudnorm=I=-13:TP=-1.2:LRA=7[m];')
     if has_audio(window):
         inputs += ['-i',str(window),'-i',str(sfx)]
-        filt=(f'[1:a]atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,volume=.88,loudnorm=I=-13:TP=-1.2:LRA=7[m];'
-              f'[2:a]atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,volume=.16[src];[3:a]volume=.58[fx];'
-              f'[m][src][fx]amix=inputs=3:duration=first:dropout_transition=0,alimiter=limit=.96[a]')
+        filt=(music_chain+
+              f'[2:a]apad=pad_dur={duration:.3f},atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,volume=.16[src];'
+              f'[3:a]apad=pad_dur={duration:.3f},atrim=duration={duration:.3f},volume=.58[fx];'
+              f'[m][src][fx]amix=inputs=3:duration=longest:dropout_transition=0,atrim=duration={duration:.3f},alimiter=limit=.96[a]')
     else:
         inputs += ['-i',str(sfx)]
-        filt=(f'[1:a]atrim=duration={duration:.3f},asetpts=PTS-STARTPTS,volume=.90,loudnorm=I=-13:TP=-1.2:LRA=7[m];'
-              f'[2:a]volume=.58[fx];[m][fx]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=.96[a]')
+        filt=(music_chain+
+              f'[2:a]apad=pad_dur={duration:.3f},atrim=duration={duration:.3f},volume=.58[fx];'
+              f'[m][fx]amix=inputs=2:duration=longest:dropout_transition=0,atrim=duration={duration:.3f},alimiter=limit=.96[a]')
     cmd=['ffmpeg','-nostdin','-hide_banner','-y']+inputs+['-filter_complex',filt,'-map','0:v','-map','[a]',
          '-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-r',str(FPS),'-c:a','aac','-b:a','192k','-movflags','+faststart','-t',f'{duration:.3f}',str(out)]
     subprocess.run(cmd,check=True)
     if not out.exists() or out.stat().st_size<800000: raise SystemExit('render failed')
+    op=probe(out)
+    oa=next((s for s in op.get('streams',[]) if s.get('codec_type')=='audio'),None)
+    if oa is None: raise SystemExit('render has no audio stream')
+    adur=float(oa.get('duration') or op['format'].get('duration') or 0)
+    if adur < duration-0.15: raise SystemExit(f'audio coverage too short: audio={adur:.3f}s video={duration:.3f}s')
     meta={
       'status':'success','mode':'continuous_choreography','output':str(out),'bytes':out.stat().st_size,
-      'duration_sec':round(duration,3),'fps':FPS,'size':'1080x1920','source_duration_sec':round(sdur,3),
+      'duration_sec':round(duration,3),'final_audio_duration_sec':round(adur,3),'fps':FPS,'size':'1080x1920','source_duration_sec':round(sdur,3),
       'selected_source_window':{'start_sec':round(start,3),'end_sec':round(start+duration,3)},
       'source_impacts_in_window':[round(t-start,3) for t in inside],
       'impact_emphasis_sec':[round(t,3) for t in emphasis],
@@ -178,7 +197,7 @@ def main():
       'post_edit_cuts_added':0,
       'post_edit_freezes_added':0,
       'visual_policy':'preserve full-width choreography; no constant zoom; max 5 localized impact accents; no micro-cut montage',
-      'music_policy':'audio extracted from top-ranked viral reference; source fight audio retained quietly for contact readability',
+      'music_policy':'audio extracted from top-ranked viral reference and looped to full video duration; source fight audio retained quietly for contact readability',
       'grammar_reference_count':grammar.get('reference_count'),
       'grammar_core_rules':grammar.get('core_rules',grammar.get('rules',[]))
     }
