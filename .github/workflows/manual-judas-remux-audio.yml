@@ -7,7 +7,7 @@ on:
       - "manual-judas-remux-trigger.txt"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   extract-audio:
@@ -77,9 +77,37 @@ jobs:
           ffmpeg -nostdin -hide_banner -y -v error -ss "$START" -i "$SRC" -t 20.0 -vn -c:a aac -b:a 192k -ar 48000 -ac 2 remux-only/judas-clean-20s.m4a
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration,size -of json remux-only/judas-clean-20s.m4a > remux-only/ffprobe.json
       - name: Upload clean remux audio
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: judas-remux-only-${{ github.run_id }}
           path: remux-only/
           if-no-files-found: error
           retention-days: 3
+      - name: Publish artifact pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          sel=json.load(open('remux-only/selection.json'))
+          out={
+            'status':'success',
+            'run_id':int(os.environ['GITHUB_RUN_ID']),
+            'artifact_id':int(os.environ['ARTIFACT_ID']),
+            'artifact_name':f"judas-remux-only-{os.environ['GITHUB_RUN_ID']}",
+            'selection':sel
+          }
+          Path('/tmp/remux-status.json').write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          PY
+          C="$(base64 -w0 /tmp/remux-status.json)"
+          P='manual-judas-remux-status.json'
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message='Publish Judas remux artifact pointer [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message='Publish Judas remux artifact pointer [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
