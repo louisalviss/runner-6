@@ -1,2 +1,2 @@
-2026-08-21T07:28+07:00
-Retry deterministic 3-reference anime+phonk study after idempotent WARP registration fix; analyze, render and QA.
+2026-08-21T07:33+07:00
+Run deterministic 3-reference anime+phonk study from latest main after TikWM API and idempotent WARP lifecycle fixes; analyze, synthesize grammar, render, QA, and publish artifact.
