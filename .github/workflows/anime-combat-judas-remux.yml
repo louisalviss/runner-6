@@ -1,0 +1,172 @@
+name: Anime Combat Judas Remux Only
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "anime-combat-judas-remux-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  remux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BASE_RUN_ID: "32442645181"
+      BASE_ARTIFACT: "anime-combat-viral-final-32442645181"
+      AUDIO_QUERY: "ytsearch1:Lady Gaga Judas official audio"
+      OUT: "final/Anime_Combat_Viral_Judas_Remux.mp4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-numpy
+          bash scripts/setup-dsh-media-tools.sh
+          mkdir -p base final dsh-handoff/downloads
+
+      - name: Download existing edited video artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$BASE_RUN_ID" -n "$BASE_ARTIFACT" -D base
+          BASE_VIDEO="$(find base -type f -name 'anime_combat_viral_pattern_v1.mp4' | head -n1)"
+          test -s "$BASE_VIDEO"
+          cp "$BASE_VIDEO" final/base-edited-video.mp4
+          ffprobe -v error -show_entries stream=index,codec_type,width,height -show_entries format=duration,size -of json final/base-edited-video.mp4 > final/base-ffprobe.json
+
+      - name: DSH download Judas clean audio
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "${AUDIO_QUERY}#dsh-audio" 720
+          P="$(python3 -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$P"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -vn -ar 48000 -ac 2 -c:a pcm_s16le final/judas-master.wav
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration,size -of json final/judas-master.wav > final/judas-ffprobe.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('final/judas-ffprobe.json'))
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration'])
+          assert int(a['sample_rate'])==48000, a
+          assert d>=20.0, d
+          print('JUDAS AUDIO READY', a['codec_name'], a['sample_rate'], d)
+          PY
+
+      - name: Pick best 20s audio window for existing edit impacts
+        run: |
+          set -euo pipefail
+          ffmpeg -nostdin -hide_banner -v error -i final/judas-master.wav -ac 1 -ar 8000 -f s16le final/judas-mono.s16
+          python3 - <<'PY'
+          import json, math
+          from pathlib import Path
+          import numpy as np
+
+          sr=8000
+          x=np.fromfile('final/judas-mono.s16', dtype=np.int16).astype(np.float32)/32768.0
+          dur=len(x)/sr
+          frame=160  # 20 ms
+          n=len(x)//frame
+          y=x[:n*frame].reshape(n,frame)
+          rms=np.sqrt(np.mean(y*y,axis=1)+1e-12)
+          onset=np.maximum(0.0, np.diff(rms, prepend=rms[0]))
+          # Normalize robustly so loud sections do not dominate purely by gain.
+          scale=float(np.percentile(onset,95)) or 1.0
+          onset=np.clip(onset/scale,0,4)
+          hop=frame/sr
+          impacts=[1.666,11.583,19.5]
+          lo=0.0
+          hi=max(0.0,dur-20.02)
+          # Avoid only the very first seconds when a full track is available.
+          if dur>70:
+              lo=25.0
+          if dur>150:
+              hi=min(hi,190.0)
+          candidates=np.arange(lo,hi+1e-9,0.02)
+          best=None
+          for s in candidates:
+              score=0.0
+              errs=[]
+              for t in impacts:
+                  c=(s+t)/hop
+                  i=int(round(c))
+                  r=max(1,int(round(0.10/hop)))
+                  a=max(0,i-r); b=min(len(onset),i+r+1)
+                  if a>=b:
+                      peak=0.0; err=1.0
+                  else:
+                      j=a+int(np.argmax(onset[a:b]))
+                      peak=float(onset[j])
+                      err=abs(j*hop-(s+t))
+                  score += 2.5*peak - 2.0*err
+                  errs.append(err)
+              a=int(s/hop); b=min(len(rms),int((s+20)/hop))
+              energy=float(np.mean(rms[a:b])) if b>a else 0.0
+              score += 0.75*energy
+              if best is None or score>best[0]:
+                  best=(score,float(s),errs,energy)
+          if best is None:
+              raise SystemExit('no valid Judas 20s window')
+          _,start,errs,energy=best
+          plan={
+            'mode':'remux_only_existing_edit',
+            'base_video':'anime_combat_viral_pattern_v1.mp4',
+            'music':'Judas — Lady Gaga',
+            'audio_window_start_sec':round(start,3),
+            'audio_window_end_sec':round(start+20.0,3),
+            'visual_impacts_sec':impacts,
+            'nearest_onset_errors_sec':[round(float(e),3) for e in errs],
+            'mean_window_rms':round(energy,6),
+            'video_edit_changed':False
+          }
+          Path('final/remux-plan.json').write_text(json.dumps(plan,indent=2),encoding='utf-8')
+          Path('final/audio-start.txt').write_text(f'{start:.3f}')
+          print(json.dumps(plan,indent=2))
+          PY
+
+      - name: Replace audio only and export MP4
+        run: |
+          set -euo pipefail
+          START="$(cat final/audio-start.txt)"
+          ffmpeg -nostdin -hide_banner -y -v error \
+            -i final/base-edited-video.mp4 \
+            -ss "$START" -t 20.0 -i final/judas-master.wav \
+            -filter_complex "[1:a]loudnorm=I=-14:LRA=9:TP=-1.5,afade=t=in:st=0:d=0.08,afade=t=out:st=19.70:d=0.30[a]" \
+            -map 0:v:0 -map "[a]" \
+            -c:v copy -c:a aac -ar 48000 -ac 2 -b:a 192k \
+            -t 20.0 -movflags +faststart "$OUT"
+          test -s "$OUT"
+          ffprobe -v error -show_entries stream=index,codec_name,codec_type,width,height,sample_rate,channels -show_entries format=duration,size -of json "$OUT" > final/remux-ffprobe.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('final/remux-ffprobe.json'))
+          v=next(s for s in p['streams'] if s['codec_type']=='video')
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration']); size=int(p['format']['size'])
+          assert (int(v['width']),int(v['height']))==(1080,1920),(v['width'],v['height'])
+          assert a['codec_name']=='aac',a
+          assert int(a['sample_rate'])==48000,a
+          assert 19.8 <= d <= 20.1,d
+          assert size > 1_000_000,size
+          print('REMUX PASS',v['width'],v['height'],a['sample_rate'],d,size)
+          PY
+
+      - name: Upload remux MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-combat-judas-remux-${{ github.run_id }}
+          path: |
+            final/Anime_Combat_Viral_Judas_Remux.mp4
+            final/remux-plan.json
+            final/remux-ffprobe.json
+          if-no-files-found: error
+          retention-days: 2
