@@ -1,50 +1,64 @@
 {
+  "captured_at": "2026-08-21",
+  "selection_mode": "data-first viral anime combat",
   "references": [
     {
-      "creator": "@blubz_amv",
-      "caption_or_title": "Hakari X Koshitan - TUCA DONKA [Edit/AMV] 4K!",
-      "tiktok_url": "https://www.tiktok.com/@blubz_amv/video/7394955155726273825",
-      "download_url": "https://www.youtube.com/watch?v=DkqnG-9cT-A",
-      "views": 5137845,
-      "likes": 563163,
-      "shares": 61436,
-      "phonk_track": "TUCA DONKA",
-      "evidence": [
-        "https://tikwm.com/video/7394955155726273825.html",
-        "https://www.youtube.com/watch?v=DkqnG-9cT-A"
-      ],
-      "why_reference": "Multi-million TikTok anime edit with explicit Brazilian phonk tag; strong dance/combat sync and high share count."
+      "rank_seed": 1,
+      "creator": "@starboy14k",
+      "caption_or_title": "Divine General Mahoraga",
+      "platform": "TikTok",
+      "publish_date": "2026-04-27",
+      "download_url": "https://www.tikwm.com/video/7633529931682549006.html",
+      "views": 3095036,
+      "likes": 456635,
+      "comments": 2315,
+      "shares": 29831,
+      "content_fit": "anime combat / JJK / high-impact character action",
+      "why_reference": "Highest-view current combat-fit candidate in the refreshed pool; strong like/share response and clear impact-oriented anime editing."
     },
     {
-      "creator": "@fl4sh.edit",
-      "caption_or_title": "Murasaki - BAD ENDING FUNK-SLOWED Gojo/JJK edit",
-      "tiktok_url": "https://www.tiktok.com/@fl4sh.edit/video/7614169494373633313",
-      "download_url": "https://tikwm.com/video/7614169494373633313.html",
-      "direct_media_fallback": "https://tikwm.com/video/media/play/7614169494373633313.mp4",
-      "views": 4011109,
-      "likes": 615707,
-      "shares": 16739,
-      "phonk_track": "BAD ENDING FUNK - SLOWED",
-      "evidence": [
-        "https://tikwm.com/video/7614169494373633313.html"
-      ],
-      "why_reference": "4M+ JJK/Gojo viral edit using explicit funk audio; useful for aura/reveal, impact and color grammar."
+      "rank_seed": 2,
+      "creator": "@banana913321",
+      "caption_or_title": "Gojo vs Sukuna x Judas edit",
+      "platform": "TikTok",
+      "publish_date": "2026-02-03",
+      "download_url": "https://www.tikwm.com/video/7602551018924100872.html",
+      "views": 2573632,
+      "likes": 280932,
+      "comments": 9988,
+      "shares": 17065,
+      "content_fit": "continuous fight identity / Gojo vs Sukuna / strong audio association",
+      "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association."
     },
     {
-      "creator": "@memphx_",
-      "caption_or_title": "SAD FUNK IS RELEASED - animeedit",
-      "tiktok_url": "https://www.tiktok.com/@memphx_/video/7589264541096217864",
-      "download_url": "https://www.tikwm.com/video/7589264541096217864.html",
-      "direct_media_fallback": "https://www.tikwm.com/video/media/play/7589264541096217864.mp4",
-      "views": 2922248,
-      "likes": 225908,
-      "shares": 13832,
-      "phonk_track": "SAD FUNK",
-      "evidence": [
-        "https://www.tikwm.com/video/7589264541096217864.html"
-      ],
-      "why_reference": "Recent 2025-2026 multi-fandom anime/funk edit with nearly 3M plays; adds a newer pacing/effect grammar distinct from Tuca Donka."
+      "rank_seed": 3,
+      "creator": "@ae_cut",
+      "caption_or_title": "Gojo vs Sukuna",
+      "platform": "TikTok",
+      "publish_date": "2026-02-21",
+      "download_url": "https://www.tikwm.com/video/7609328990158884104.html",
+      "views": 1762710,
+      "likes": 196397,
+      "comments": 2064,
+      "shares": 19436,
+      "content_fit": "fight-focused JJK edit / sustained combat",
+      "why_reference": "1.7M+ views with strong shares; useful for continuous combat pacing rather than pure aura montage."
+    },
+    {
+      "rank_seed": 4,
+      "creator": "@king.diablo77",
+      "caption_or_title": "The 1v3 That Proved Gojo Was The Strongest",
+      "platform": "TikTok",
+      "publish_date": "2026-06-23",
+      "download_url": "https://www.tikwm.com/video/7654633027699526925.html",
+      "views": 1270102,
+      "likes": 178036,
+      "comments": 4373,
+      "shares": 11413,
+      "content_fit": "recent high-velocity combat narrative / Gojo 1v3",
+      "why_reference": "More recent combat winner with high engagement and a clear fight-story hook, useful to prevent overfitting to older edits."
     }
   ],
-  "selection_note": "Strict anime+phonk/funk reference set. Mahoraga x The Largest remains a separate prior editing reference but is excluded here because BigXthaPlug is not phonk."
+  "ranking_rule": "Observed performance + combat/content fit only. Do not include license, official-source preference, download convenience or codec availability in ranking.",
+  "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame."
 }
