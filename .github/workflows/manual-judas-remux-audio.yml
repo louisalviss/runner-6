@@ -1,0 +1,85 @@
+name: Manual Judas Remux Audio
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "manual-judas-remux-trigger.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  extract-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-numpy
+          bash scripts/setup-dsh-media-tools.sh
+      - name: DSH resolve and download Judas
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads remux-only
+          bash scripts/dsh-download-media.sh "ytsearch1:Lady Gaga Judas official audio#dsh-audio" 720
+          SRC="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$SRC"
+          printf '%s' "$SRC" > /tmp/judas_source_path
+      - name: Pick 20s clean-song window for existing edit
+        run: |
+          set -euo pipefail
+          SRC="$(cat /tmp/judas_source_path)"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$SRC" -vn -ac 1 -ar 8000 -c:a pcm_s16le /tmp/judas_mono.wav
+          python - <<'PY'
+          import json, wave
+          import numpy as np
+          from pathlib import Path
+          impacts=np.array([1.666,11.583,19.5],dtype=float)
+          weights=np.array([0.9,1.15,1.25],dtype=float)
+          with wave.open('/tmp/judas_mono.wav','rb') as w:
+              sr=w.getframerate(); raw=w.readframes(w.getnframes())
+          x=np.frombuffer(raw,dtype=np.int16).astype(np.float32)/32768.0
+          duration=len(x)/sr
+          if duration<20: raise SystemExit(f'audio too short: {duration:.3f}')
+          frame=512; hop=80; win=np.hanning(frame).astype(np.float32)
+          mags=[]
+          for i in range(0,max(1,len(x)-frame),hop):
+              mags.append(np.abs(np.fft.rfft(x[i:i+frame]*win)))
+          M=np.asarray(mags,dtype=np.float32)
+          flux=np.zeros(len(M),dtype=np.float32)
+          if len(M)>1:
+              d=M[1:]-M[:-1]; d[d<0]=0; flux[1:]=d.sum(axis=1)
+          flux=np.log1p(flux)
+          if float(flux.max())>0: flux/=float(flux.max())
+          env=np.convolve(flux,np.ones(5,dtype=np.float32)/5,mode='same')
+          dt=hop/sr
+          def peak(t,r=.14):
+              c=int(round(t/dt)); rr=max(1,int(r/dt)); a=max(0,c-rr); b=min(len(env),c+rr+1)
+              return float(env[a:b].max()) if b>a else 0.0
+          best=(-1.0,0.0,[])
+          for s in np.arange(0.0,max(0.0,duration-20.0)+1e-9,0.02):
+              vals=[peak(float(s+t)) for t in impacts]
+              a=int(s/dt); b=min(len(env),int((s+20)/dt)); energy=float(np.percentile(env[a:b],75)) if b>a else 0.0
+              score=float(np.dot(weights,vals)+0.35*energy)
+              if score>best[0]: best=(score,float(s),vals)
+          score,start,vals=best
+          meta={'track':'Judas — Lady Gaga','video_impacts_sec':impacts.tolist(),'selected_song_start_sec':round(start,3),'selected_song_end_sec':round(start+20,3),'impact_onset_scores':[round(v,4) for v in vals],'selection_score':round(score,4),'source_duration_sec':round(duration,3)}
+          Path('remux-only/selection.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
+          Path('/tmp/judas_start').write_text(f'{start:.3f}')
+          print(json.dumps(meta,indent=2))
+          PY
+          START="$(cat /tmp/judas_start)"
+          ffmpeg -nostdin -hide_banner -y -v error -ss "$START" -i "$SRC" -t 20.0 -vn -c:a aac -b:a 192k -ar 48000 -ac 2 remux-only/judas-clean-20s.m4a
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration,size -of json remux-only/judas-clean-20s.m4a > remux-only/ffprobe.json
+      - name: Upload clean remux audio
+        uses: actions/upload-artifact@v4
+        with:
+          name: judas-remux-only-${{ github.run_id }}
+          path: remux-only/
+          if-no-files-found: error
+          retention-days: 3
