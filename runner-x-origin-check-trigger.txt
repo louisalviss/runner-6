@@ -1,2 +1,2 @@
-tweet=https://x.com/xiaoheshang2025/status/2090365030848209306?s=12
-requested_at=2026-08-21T09:29:00+07:00
+tweet=https://x.com/cryptoshan484/status/2090486831137886703?s=12
+nonce=cryptoshan-2090486831137886703
