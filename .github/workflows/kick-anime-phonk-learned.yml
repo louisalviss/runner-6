@@ -1,0 +1,24 @@
+name: Kick Anime Phonk Learned Render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/kick-anime-phonk-learned.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch production workflow at latest main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run anime-phonk-learned-render.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo 'production workflow dispatched'
