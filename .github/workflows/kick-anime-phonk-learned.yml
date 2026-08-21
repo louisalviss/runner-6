@@ -28,5 +28,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          echo 'dispatch-after-warp-fix-v3'
           gh workflow run anime-phonk-learned-render.yml --repo "$GITHUB_REPOSITORY" --ref main
           echo 'production workflow dispatched'
