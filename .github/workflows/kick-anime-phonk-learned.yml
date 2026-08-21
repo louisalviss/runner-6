@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/kick-anime-phonk-learned.yml"
+      - "kick-anime-phonk-trigger.txt"
   workflow_dispatch:
 
 permissions:
@@ -28,6 +29,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo 'dispatch-after-warp-fix-v3'
           gh workflow run anime-phonk-learned-render.yml --repo "$GITHUB_REPOSITORY" --ref main
           echo 'production workflow dispatched'
