@@ -19,6 +19,11 @@ if [[ "$URL" == *"$AUDIO_MARKER" ]]; then
   URL="${URL%%$AUDIO_MARKER*}"
 fi
 
+IS_YOUTUBE=0
+case "$URL" in
+  *youtube.com*|*youtu.be*|ytsearch*:*) IS_YOUTUBE=1 ;;
+esac
+
 mkdir -p dsh-handoff/downloads
 
 write_handoff() {
@@ -44,9 +49,6 @@ PY
   printf 'Media type: %s\n' "$mode"
 }
 
-# Deterministic original music source used when production needs a clean,
-# structured track derived from learned viral music grammar. This is not a
-# network fallback and never masquerades as the reference song master.
 if [ "$MODE" = audio ] && [[ "$URL" == dsh-original://* ]]; then
   OUT="dsh-handoff/downloads/no_mercy_131_$(date +%s%N).wav"
   python scripts/generate-anime-combat-track.py "$OUT"
@@ -62,9 +64,6 @@ if [ "$MODE" = audio ] && [[ "$URL" == dsh-original://* ]]; then
   exit 0
 fi
 
-# TikTok/TikWM: resolve the current media URL through TikWM's JSON API first.
-# HTTP 200 is not sufficient: TikWM can return an application-level error or
-# an empty data object. Validate the JSON before treating an API call as good.
 if [ "$MODE" = video ] && [[ "$URL" == *tiktok.com* || "$URL" == *tikwm.com/video/* ]]; then
   SOURCE="$URL"
   if [[ "$SOURCE" == *tikwm.com/video/* ]]; then
@@ -228,13 +227,13 @@ try_public_clients() {
   out="$(run_ytdlp -f "$format")"
   code=$?
   set -e
-  if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+  if [ "$code" -ne 0 ] && [ "$IS_YOUTUBE" -eq 1 ]; then
     set +e
     out="$(run_ytdlp --extractor-args 'youtube:player_client=web_embedded,default' -f "$format")"
     code=$?
     set -e
   fi
-  if [ "$code" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+  if [ "$code" -ne 0 ] && [ "$IS_YOUTUBE" -eq 1 ]; then
     set +e
     out="$(run_ytdlp --extractor-args 'youtube:player_client=web_safari' -f "$format")"
     code=$?
@@ -250,7 +249,7 @@ try_public_clients
 OUT="$PUBLIC_OUT"
 CODE="$PUBLIC_CODE"
 
-if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+if [ "$CODE" -ne 0 ] && [ "$IS_YOUTUBE" -eq 1 ]; then
   echo 'Direct YouTube download blocked; switching media egress through Cloudflare WARP.' >&2
   WARP_CONNECTED=0
   set +e
@@ -268,7 +267,7 @@ if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; t
   fi
 fi
 
-if [ "$CODE" -ne 0 ] && [[ "$URL" == *youtube.com* || "$URL" == *youtu.be* ]]; then
+if [ "$CODE" -ne 0 ] && [ "$IS_YOUTUBE" -eq 1 ]; then
   echo 'WARP/public clients still blocked; trying isolated VPNGate relay worker.' >&2
   set +e
   OUT="$(YTDLP_BIN="$YTDLP" DSH_MEDIA_MODE="$MODE" bash scripts/dsh-ytdlp-vpngate.sh "$URL" "$HEIGHT")"
