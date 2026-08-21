@@ -1,2 +1,2 @@
-2026-08-21T07:16+07:00
-Retry deterministic 3-reference anime+phonk study after TikWM API media resolution fix; then analyze, render and QA.
+2026-08-21T07:28+07:00
+Retry deterministic 3-reference anime+phonk study after idempotent WARP registration fix; analyze, render and QA.
