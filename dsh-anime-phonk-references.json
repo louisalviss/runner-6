@@ -28,7 +28,14 @@
       "comments": 9988,
       "shares": 17065,
       "content_fit": "continuous fight identity / Gojo vs Sukuna / strong audio association",
-      "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association."
+      "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association.",
+      "music_identity": {
+        "title": "Judas",
+        "artist": "Lady Gaga",
+        "clean_audio_url": "https://www.youtube.com/watch?v=DFMuOi2GiBo",
+        "bpm_reference": 131,
+        "selection_reason": "The viral reference explicitly identifies the edit as Gojo vs Sukuna x Judas; use a clean song master for production rather than the reference video's mixed audio."
+      }
     },
     {
       "rank_seed": 3,
@@ -60,5 +67,6 @@
     }
   ],
   "ranking_rule": "Observed performance + combat/content fit only. Do not include license, official-source preference, download convenience or codec availability in ranking.",
-  "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame."
+  "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame.",
+  "music_rule": "When a winning reference has an identifiable song, production must use a clean song master for beat/onset analysis. Never use the reference video's mixed audio, dialogue, ambient sound or embedded SFX as the music bed."
 }
