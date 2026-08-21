@@ -9,12 +9,30 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: manual-judas-remux-audio
+  cancel-in-progress: true
+
 jobs:
   extract-audio:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Publish running pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","run_id":%s}\n' "$GITHUB_RUN_ID" > /tmp/remux-status.json
+          C="$(base64 -w0 /tmp/remux-status.json)"
+          P='manual-judas-remux-status.json'
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message='Judas remux running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message='Judas remux running [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
       - name: Install media tools
         run: |
           set -euo pipefail
