@@ -1,2 +1,2 @@
-2026-08-22T05:18+07:00
-Remux-only trigger after workflow exists on main: DSH acquire clean Judas — Lady Gaga by title/artist search, choose the best 20s song window for the existing 20s visual edit impacts, upload audio artifact only. Do not rerun video edit logic.
+2026-08-22T05:22+07:00
+Remux-only final trigger: DSH acquire clean Judas — Lady Gaga, choose the best 20s song window for the existing edited visual impacts, upload audio artifact, and publish run/artifact pointer. No video re-edit.
