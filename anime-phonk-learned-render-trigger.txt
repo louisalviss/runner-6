@@ -1,2 +1,2 @@
-2026-08-21T06:42+07:00
-Run deterministic 3-reference anime+phonk study, source/audio download, learned-grammar render and QA.
+2026-08-21T07:16+07:00
+Retry deterministic 3-reference anime+phonk study after TikWM API media resolution fix; then analyze, render and QA.
