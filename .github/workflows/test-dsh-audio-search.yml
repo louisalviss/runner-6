@@ -1,0 +1,43 @@
+name: Test DSH Audio Search
+
+on:
+  push:
+    branches:
+      - fix/dsh-ytsearch-audio
+    paths:
+      - 'scripts/dsh-download-audio-search.sh'
+      - '.github/workflows/test-dsh-audio-search.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+
+      - name: Resolve Judas by name through DSH
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-audio-search.sh 'Lady Gaga Judas official audio'
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffprobe -v error -show_streams -show_format -of json "$P" > /tmp/probe.json
+          python - <<'PY'
+          import json
+          p=json.load(open('/tmp/probe.json'))
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration'])
+          size=int(p['format']['size'])
+          assert d > 30, d
+          assert size > 1_000_000, size
+          print('DSH AUDIO SEARCH PASS', a['codec_name'], a.get('sample_rate'), d, size)
+          PY
