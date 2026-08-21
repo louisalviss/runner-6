@@ -44,6 +44,24 @@ PY
   printf 'Media type: %s\n' "$mode"
 }
 
+# Deterministic original music source used when production needs a clean,
+# structured track derived from learned viral music grammar. This is not a
+# network fallback and never masquerades as the reference song master.
+if [ "$MODE" = audio ] && [[ "$URL" == dsh-original://* ]]; then
+  OUT="dsh-handoff/downloads/no_mercy_131_$(date +%s%N).wav"
+  python scripts/generate-anime-combat-track.py "$OUT"
+  if [ ! -s "$OUT" ]; then
+    echo 'original music generator produced no output' >&2
+    exit 4
+  fi
+  if ! ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of json "$OUT" >/dev/null 2>&1; then
+    echo 'original music generator returned invalid audio' >&2
+    exit 4
+  fi
+  write_handoff "$URL" "$OUT" audio
+  exit 0
+fi
+
 # TikTok/TikWM: resolve the current media URL through TikWM's JSON API first.
 # HTTP 200 is not sufficient: TikWM can return an application-level error or
 # an empty data object. Validate the JSON before treating an API call as good.
