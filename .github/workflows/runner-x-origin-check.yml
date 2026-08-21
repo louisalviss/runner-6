@@ -1,0 +1,161 @@
+name: Runner X Origin Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/runner-x-origin-check.yml"
+      - "runner-x-origin-check-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-x-origin-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TWEET_URL: "https://x.com/xiaoheshang2025/status/2090365030848209306?s=12"
+      OUT_FILE: "runner-x-origin-check-result.json"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Probe original X endpoints
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, re, html, urllib.request, urllib.parse, time
+          from html.parser import HTMLParser
+
+          tweet_url = "https://x.com/xiaoheshang2025/status/2090365030848209306?s=12"
+          canonical = "https://x.com/xiaoheshang2025/status/2090365030848209306"
+          endpoints = {
+              "x_direct": canonical,
+              "twitter_direct": canonical.replace("https://x.com/", "https://twitter.com/"),
+              "x_oembed_official": "https://publish.twitter.com/oembed?" + urllib.parse.urlencode({"url": canonical, "omit_script": "true", "dnt": "true"}),
+          }
+
+          class TextExtractor(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.parts=[]
+              def handle_data(self, data):
+                  self.parts.append(data)
+
+          def fetch(url):
+              req=urllib.request.Request(url, headers={
+                  "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/139 Safari/537.36",
+                  "Accept-Language":"en-US,en;q=0.9",
+                  "Accept":"text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      raw=r.read(300000)
+                      ctype=r.headers.get("content-type","")
+                      return {"ok": True, "status": getattr(r,"status",200), "final_url":r.geturl(), "content_type":ctype, "body":raw.decode("utf-8","replace")}
+              except Exception as e:
+                  return {"ok": False, "error":repr(e)}
+
+          out={"tweet_url":canonical,"checked_at_utc":time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),"probes":{}}
+          for name,url in endpoints.items():
+              r=fetch(url)
+              item={k:v for k,v in r.items() if k!="body"}
+              body=r.get("body","")
+              if name=="x_oembed_official" and r.get("ok"):
+                  try:
+                      j=json.loads(body)
+                      item["oembed"]={k:j.get(k) for k in ["url","author_name","author_url","provider_name","provider_url","type","version","width"]}
+                      h=j.get("html","") or ""
+                      p=TextExtractor(); p.feed(h)
+                      text=" ".join(" ".join(p.parts).split())
+                      item["tweet_text_rendered"]=html.unescape(text)
+                      item["html"]=h
+                  except Exception as e:
+                      item["parse_error"]=repr(e); item["body_excerpt"]=body[:5000]
+              elif r.get("ok"):
+                  metas={}
+                  for prop in ["og:title","og:description","og:image","twitter:title","twitter:description","twitter:image"]:
+                      m=re.search(r'<meta[^>]+(?:property|name)=["\']'+re.escape(prop)+r'["\'][^>]+content=["\']([^"\']*)', body, re.I)
+                      if not m:
+                          m=re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']'+re.escape(prop)+r'["\']', body, re.I)
+                      if m: metas[prop]=html.unescape(m.group(1))
+                  item["meta"]=metas
+                  item["body_has_status_id"]="2090365030848209306" in body
+                  item["body_excerpt"]=body[:5000]
+              out["probes"][name]=item
+
+          o=out["probes"].get("x_oembed_official",{})
+          out["official_x_success"]=bool(o.get("ok") and o.get("tweet_text_rendered"))
+          with open("runner-x-origin-check-result.json","w",encoding="utf-8") as f:
+              json.dump(out,f,ensure_ascii=False,indent=2)
+          print(json.dumps(out,ensure_ascii=False,indent=2))
+          PY
+
+      - name: WARP fallback if official X failed
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NEED=$(python - <<'PY'
+          import json
+          p=json.load(open('runner-x-origin-check-result.json'))
+          print('0' if p.get('official_x_success') else '1')
+          PY
+          )
+          if [ "$NEED" != "1" ]; then
+            echo "Official X oEmbed succeeded; WARP not needed."
+            exit 0
+          fi
+          echo "Official X access failed; attempting WARP fallback."
+          sudo install -m 0755 -d /usr/share/keyrings
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          CODENAME=$( . /etc/os-release; echo "$VERSION_CODENAME" )
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $CODENAME main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y cloudflare-warp >/dev/null
+          sudo systemctl start warp-svc || true
+          sudo warp-cli --accept-tos registration new || true
+          sudo warp-cli --accept-tos mode warp || true
+          sudo warp-cli --accept-tos connect || true
+          sleep 5
+          python - <<'PY'
+          import json, urllib.request, urllib.parse, html, time
+          from html.parser import HTMLParser
+          p=json.load(open('runner-x-origin-check-result.json'))
+          canonical=p['tweet_url']
+          url='https://publish.twitter.com/oembed?'+urllib.parse.urlencode({'url':canonical,'omit_script':'true','dnt':'true'})
+          class T(HTMLParser):
+              def __init__(self): super().__init__(); self.x=[]
+              def handle_data(self,d): self.x.append(d)
+          try:
+              req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  body=r.read().decode('utf-8','replace'); j=json.loads(body); q=T(); q.feed(j.get('html',''))
+                  p['warp_fallback']={'ok':True,'status':getattr(r,'status',200),'tweet_text_rendered':html.unescape(' '.join(' '.join(q.x).split())),'oembed':j}
+          except Exception as e:
+              p['warp_fallback']={'ok':False,'error':repr(e)}
+          with open('runner-x-origin-check-result.json','w',encoding='utf-8') as f: json.dump(p,f,ensure_ascii=False,indent=2)
+          PY
+          sudo warp-cli --accept-tos disconnect || true
+
+      - name: Commit result
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          C=$(base64 -w0 runner-x-origin-check-result.json)
+          S=$(gh api "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE?ref=main" --jq .sha 2>/dev/null || true)
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE" -f message='Update Runner X origin result [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$OUT_FILE" -f message='Store Runner X origin result [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
