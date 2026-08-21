@@ -30,13 +30,12 @@
       "content_fit": "continuous fight identity / Gojo vs Sukuna / strong audio association",
       "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association.",
       "music_identity": {
-        "reference_song_title": "Judas",
-        "reference_song_artist": "Lady Gaga",
-        "title": "No Mercy 131",
-        "artist": "runner-6 original",
-        "clean_audio_url": "dsh-original://no-mercy-131",
+        "title": "Judas",
+        "artist": "Lady Gaga",
+        "audio_search_query": "Lady Gaga Judas official audio",
+        "clean_audio_url": "ytsearch1:Lady Gaga Judas official audio",
         "bpm_reference": 131,
-        "selection_reason": "The viral reference establishes the 131 BPM dark-pop combat-sync grammar. Production uses an original clean track with a real intro/build/drop/break/second-drop structure at the same tempo so the edit can be beat-synced without mixed reference audio or DRM workarounds."
+        "selection_reason": "Assistant identifies the audio by title/artist from the winning reference. DSH receives only that identity/search query, resolves a suitable clean source itself, downloads it, and hands the file back for verification and beat analysis. No hardcoded media URL and no assistant-authored substitute track."
       }
     },
     {
@@ -70,5 +69,5 @@
   ],
   "ranking_rule": "Observed performance + combat/content fit only. Do not include license, official-source preference, download convenience or codec availability in ranking.",
   "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame.",
-  "music_rule": "Use the viral reference to learn song identity, BPM and structural sync grammar. Production audio must be a clean music track only; never use the reference video's dialogue, ambient sound or embedded SFX as the music bed. If the reference master cannot be used directly, preserve the learned music grammar with an original structured track rather than bypassing DRM or using an unauthorized mirror."
+  "music_rule": "Assistant determines only the audio identity (title/artist) from the selected reference. DSH must search, resolve and download the clean music source itself from that identity, then the pipeline verifies the returned media before beat/onset analysis. Never hardcode a media URL, never substitute an assistant-generated track merely because acquisition is difficult, and never use the reference video's dialogue/ambient/SFX mix as the music bed."
 }
