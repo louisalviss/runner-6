@@ -1,7 +1,9 @@
 {
-  "status": "running",
+  "status": "success",
   "run_id": 32532711228,
   "head_sha": "8c85487a9a6a3d73e28300094cef536ff2da18f1",
   "artifact_name": "anime-combat-judas-remux-32532711228",
-  "mode": "remux_only_existing_edit"
+  "mode": "remux_only_existing_edit",
+  "remux_conclusion": "success",
+  "upload_conclusion": "success"
 }
