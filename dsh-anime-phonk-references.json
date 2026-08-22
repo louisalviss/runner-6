@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-08-21",
+  "captured_at": "2026-08-22",
   "selection_mode": "data-first viral anime combat",
   "references": [
     {
@@ -14,7 +14,15 @@
       "comments": 2315,
       "shares": 29831,
       "content_fit": "anime combat / JJK / high-impact character action",
-      "why_reference": "Highest-view current combat-fit candidate in the refreshed pool; strong like/share response and clear impact-oriented anime editing."
+      "why_reference": "Highest-view current combat-fit candidate in the refreshed pool; strong like/share response and clear impact-oriented anime editing.",
+      "music_identity": {
+        "title": "Murder In My Mind",
+        "artist": "Kordhell",
+        "audio_search_query": "Kordhell Murder In My Mind official audio",
+        "clean_audio_url": "ytsearch1:Kordhell Murder In My Mind official audio",
+        "bpm_reference": 120,
+        "selection_reason": "Selected as a canonical widely used phonk edit track. DSH resolves and downloads the clean track; Runner-6 re-analyzes the actual audio and rebuilds timing against its detected beats rather than reusing the prior Judas timing."
+      }
     },
     {
       "rank_seed": 2,
@@ -28,15 +36,7 @@
       "comments": 9988,
       "shares": 17065,
       "content_fit": "continuous fight identity / Gojo vs Sukuna / strong audio association",
-      "why_reference": "Multi-million fight edit with unusually strong comment activity and a memorable audio-to-fight association.",
-      "music_identity": {
-        "title": "Judas",
-        "artist": "Lady Gaga",
-        "audio_search_query": "Lady Gaga Judas official audio",
-        "clean_audio_url": "ytsearch1:Lady Gaga Judas official audio",
-        "bpm_reference": 131,
-        "selection_reason": "Assistant identifies the audio by title/artist from the winning reference. DSH receives only that identity/search query, resolves a suitable clean source itself, downloads it, and hands the file back for verification and beat analysis. No hardcoded media URL and no assistant-authored substitute track."
-      }
+      "why_reference": "Multi-million fight edit with unusually strong comment activity; retained only as visual pacing reference."
     },
     {
       "rank_seed": 3,
@@ -64,10 +64,10 @@
       "comments": 4373,
       "shares": 11413,
       "content_fit": "recent high-velocity combat narrative / Gojo 1v3",
-      "why_reference": "More recent combat winner with high engagement and a clear fight-story hook, useful to prevent overfitting to older edits."
+      "why_reference": "Recent combat winner with high engagement and a clear fight-story hook."
     }
   ],
   "ranking_rule": "Observed performance + combat/content fit only. Do not include license, official-source preference, download convenience or codec availability in ranking.",
   "learning_rule": "Learn shared hook, pacing, action-unit, audio-impact, escalation and payoff grammar across winners; do not copy any single reference frame-by-frame.",
-  "music_rule": "Assistant determines only the audio identity (title/artist) from the selected reference. DSH must search, resolve and download the clean music source itself from that identity, then the pipeline verifies the returned media before beat/onset analysis. Never hardcode a media URL, never substitute an assistant-generated track merely because acquisition is difficult, and never use the reference video's dialogue/ambient/SFX mix as the music bed."
+  "music_rule": "For this production, use Kordhell - Murder In My Mind. DSH must resolve and download a clean source from the supplied identity/search query. Runner-6 must perform fresh beat/onset analysis on that file and rebuild all impact mapping for the new song. Do not reuse old Judas timestamps or simply replace the audio bed."
 }
