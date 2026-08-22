@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "anime-v09-dsh-delegated-trigger.txt"
+  pull_request:
+    branches: [main]
+    paths:
+      - "anime-v09-dsh-delegated-trigger.txt"
   workflow_dispatch:
 
 permissions:
