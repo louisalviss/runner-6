@@ -1,0 +1,43 @@
+name: Anime Combat v0.9 Alternate Render
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "anime-v09-alt-trigger.txt"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-opencv python3-numpy
+          bash scripts/setup-dsh-media-tools.sh
+      - name: Run readability-first v0.9 pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/run-anime-v09-alt-ci.sh
+      - name: Upload final MP4 and QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-v09-alt-${{ github.run_id }}
+          path: |
+            dsh-handoff/anime-v09-alt/source-selection.json
+            dsh-handoff/anime-v09-alt/music-selection.json
+            dsh-handoff/anime-v09-alt/final/edit-plan.json
+            dsh-handoff/anime-v09-alt/final/output-analysis/analysis.json
+            dsh-handoff/anime-v09-alt/final/output-analysis/contact.jpg
+            dsh-handoff/anime-v09-alt/final/SOURCE_MANIFEST.json
+            dsh-handoff/anime-v09-alt/final/anime_combat_v09_alt.mp4
+          if-no-files-found: error
+          retention-days: 2
