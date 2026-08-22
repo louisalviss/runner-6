@@ -1,0 +1,3 @@
+2026-08-23T00:45:00+07:00
+Run semantic anime combat v0.8 render from learned grammar and original production source/music selections. Build a new semantic timeline, dynamic 9:16 reframe, phrase-aware impact mapping, creative+technical QA, then upload MP4.
+Execution nonce: semantic-v08-first-run-2026-08-23T00:45:00+07:00
