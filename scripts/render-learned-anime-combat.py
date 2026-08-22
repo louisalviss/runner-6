@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, json, math, subprocess
+import argparse, itertools, json, math, subprocess
 from pathlib import Path
 import cv2
 import numpy as np
@@ -7,6 +7,7 @@ import numpy as np
 W, H = 1080, 1920
 FPS = 30
 TARGET = 20.0
+MAX_SPEED_DEVIATION = 0.35
 
 
 def probe(path):
@@ -107,8 +108,6 @@ def choose_source_window(sa, duration, target=TARGET):
     if duration <= target + 0.1:
         return 0.0, min(target, duration - 0.05), impacts
 
-    # Build windows around every detected impact at several useful positions.
-    # Count genuine impacts first; only then use temporal spread as tie-breaker.
     starts = {0.0, max(0.0, duration - target)}
     desired_positions = (0.15, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 18.0, 19.5, 19.85)
     for t in impacts:
@@ -120,7 +119,6 @@ def choose_source_window(sa, duration, target=TARGET):
         e = s + target
         inside = [t for t in impacts if s + 0.12 <= t <= e - 0.12]
         rel = [t - s for t in inside]
-        # For scoring only, collapse near-duplicates caused by the detector.
         distinct = []
         for t in rel:
             if not distinct or t - distinct[-1] >= 0.70:
@@ -128,7 +126,6 @@ def choose_source_window(sa, duration, target=TARGET):
         spread = (distinct[-1] - distinct[0]) / target if len(distinct) >= 2 else 0.0
         early = 1.0 if distinct and distinct[0] <= 2.5 else 0.0
         late = 1.0 if distinct and distinct[-1] >= 15.0 else 0.0
-        # Lexicographic priority encoded strongly: impact count dominates.
         score = len(distinct) * 100.0 + spread * 8.0 + early * 1.5 + late * 1.0
         candidate = (score, len(distinct), spread, -s, s, inside)
         if best is None or candidate[:4] > best[:4]:
@@ -144,7 +141,6 @@ def select_impact_anchors(inside_abs, start, max_events=5):
     if len(raw) < 3:
         return raw
 
-    # Collapse only true detector-near-duplicates. Combat hits ~1s apart remain distinct.
     groups = []
     for t in raw:
         if not groups or t - groups[-1][-1] > 0.70:
@@ -153,7 +149,6 @@ def select_impact_anchors(inside_abs, start, max_events=5):
             groups[-1].append(t)
     reps = [g[len(g)//2] for g in groups]
 
-    # If grouping became too aggressive, preserve three well-spread real impacts.
     if len(reps) < 3 and len(raw) >= 3:
         idx = np.linspace(0, len(raw) - 1, 3).round().astype(int)
         reps = [raw[i] for i in sorted(set(idx.tolist()))]
@@ -162,6 +157,28 @@ def select_impact_anchors(inside_abs, start, max_events=5):
         idx = np.linspace(0, len(reps) - 1, max_events).round().astype(int)
         reps = [reps[i] for i in sorted(set(idx.tolist()))]
     return reps
+
+
+def mapping_speeds(source_impacts, chosen, duration):
+    sa = [0.0] + list(source_impacts) + [duration]
+    ta = [0.0] + list(chosen) + [duration]
+    return [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
+
+
+def best_constrained_beat_mapping(source_impacts, beats, duration=TARGET):
+    n = len(source_impacts)
+    candidates = [float(b) for b in beats if 0.15 < b < duration - 0.20]
+    best = None
+    for combo in itertools.combinations(candidates, n):
+        if any(combo[i] - combo[i-1] <= 0.55 for i in range(1, n)):
+            continue
+        speeds = mapping_speeds(source_impacts, combo, duration)
+        max_dev = max(abs(x - 1.0) for x in speeds)
+        timing_cost = sum(abs(combo[i] - source_impacts[i]) for i in range(n))
+        score = (max_dev, timing_cost)
+        if best is None or score < best[0]:
+            best = (score, list(combo), speeds)
+    return best
 
 
 def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
@@ -188,17 +205,14 @@ def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
     chosen = list(chosen[:n])
 
     while len(source_impacts) > 3:
-        sa = [0.0] + source_impacts + [duration]
-        ta = [0.0] + chosen + [duration]
-        speeds = [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
-        if min(speeds) >= 0.72 and max(speeds) <= 1.35:
+        speeds = mapping_speeds(source_impacts, chosen, duration)
+        if max(abs(x - 1.0) for x in speeds) <= MAX_SPEED_DEVIATION:
             break
-        # Drop the anchor causing the largest local speed distortion, not always the finisher.
         distortion = []
         for j in range(len(source_impacts)):
-            s2 = [0.0] + source_impacts[:j] + source_impacts[j+1:] + [duration]
-            t2 = [0.0] + chosen[:j] + chosen[j+1:] + [duration]
-            sp = [(s2[i+1] - s2[i]) / max(1e-6, t2[i+1] - t2[i]) for i in range(len(s2)-1)]
+            s2 = source_impacts[:j] + source_impacts[j+1:]
+            t2 = chosen[:j] + chosen[j+1:]
+            sp = mapping_speeds(s2, t2, duration)
             distortion.append(max(abs(x - 1.0) for x in sp))
         j = int(np.argmin(distortion))
         source_impacts.pop(j)
@@ -206,9 +220,17 @@ def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
 
     if len(source_impacts) < 3:
         raise SystemExit('beat mapping retained fewer than 3 impacts')
-    sa = [0.0] + source_impacts + [duration]
-    ta = [0.0] + chosen + [duration]
-    speeds = [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
+
+    speeds = mapping_speeds(source_impacts, chosen, duration)
+    if max(abs(x - 1.0) for x in speeds) > MAX_SPEED_DEVIATION:
+        constrained = best_constrained_beat_mapping(source_impacts, beats, duration)
+        if constrained is None or constrained[0][0] > MAX_SPEED_DEVIATION:
+            raise SystemExit(
+                f'no beat mapping satisfies max speed deviation <= {MAX_SPEED_DEVIATION:.2f}; '
+                f'best={constrained[0][0]:.4f}' if constrained else 'no constrained beat mapping found'
+            )
+        _, chosen, speeds = constrained
+
     return source_impacts, chosen, speeds
 
 
