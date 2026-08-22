@@ -1,0 +1,13 @@
+{
+  "mode": "benchmark",
+  "test_chapters": 3,
+  "provider": "cloudflare_workers_ai",
+  "stages": [
+    "split",
+    "story_bible",
+    "edit",
+    "verify",
+    "epub_export"
+  ],
+  "checkpoint": true
+}
