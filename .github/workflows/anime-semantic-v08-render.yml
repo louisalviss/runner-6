@@ -1,0 +1,173 @@
+name: Anime Semantic Combat v0.8 Render
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "semantic-anime-v08-trigger.txt"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: runner-6-anime-semantic-v08
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ROOT: dsh-handoff/anime-semantic-v08
+      FINAL: dsh-handoff/anime-semantic-v08/final/anime_combat_semantic_v08.mp4
+      STATUS_FILE: semantic-anime-v08-status.json
+      SEED_RUN: "32584331575"
+      SEED_ARTIFACT: anime-combat-beat-sync-final-32584331575
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-opencv python3-numpy
+          bash scripts/setup-dsh-media-tools.sh
+          mkdir -p "$ROOT/final" seed
+
+      - name: Publish running status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '{"status":"running","phase":"seed","run_id":"%s","artifact_present":false,"flow":"v0.8-semantic-combat-editor"}\n' "$GITHUB_RUN_ID" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Semantic anime v0.8 running [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Semantic anime v0.8 running [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
+
+      - name: Load learned grammar and ranked selections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$SEED_RUN" --name "$SEED_ARTIFACT" -D seed
+          cp seed/learned-combat-grammar.json "$ROOT/learned-combat-grammar.json"
+          cp seed/source-selection.json "$ROOT/source-selection.json"
+          cp seed/music-selection.json "$ROOT/music-selection.json"
+          cp seed/reference-ranking.json "$ROOT/reference-ranking.json"
+          test -s "$ROOT/learned-combat-grammar.json"
+
+      - name: Download original production source with DSH
+        run: |
+          set -euo pipefail
+          URL="$(python -c "import json;print(json.load(open('$ROOT/source-selection.json'))['selected']['url'])")"
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "$URL" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -t 420 -map 0:v:0 -map 0:a? -c:v libx264 -preset veryfast -crf 18 -c:a aac -ar 48000 -b:a 160k -movflags +faststart "$ROOT/final/source.mp4"
+          test -s "$ROOT/final/source.mp4"
+          python scripts/analyze-viral-edit.py "$ROOT/final/source.mp4" "$ROOT/final/source-analysis"
+
+      - name: Download clean Murder In My Mind master with DSH
+        run: |
+          set -euo pipefail
+          URL="$(python -c "import json;print(json.load(open('$ROOT/music-selection.json'))['clean_audio_url'])")"
+          TITLE="$(python -c "import json;d=json.load(open('$ROOT/music-selection.json'));print(d['title']+' — '+d['artist'])")"
+          printf '%s' "$TITLE" > /tmp/music_title
+          rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
+          mkdir -p dsh-handoff/downloads
+          bash scripts/dsh-download-media.sh "${URL}#dsh-audio" 720
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          ffmpeg -nostdin -hide_banner -y -v error -i "$P" -vn -ar 48000 -ac 2 -c:a pcm_s16le "$ROOT/final/music-master.wav"
+          test "$(stat -c '%s' "$ROOT/final/music-master.wav")" -gt 1000000
+
+      - name: Render semantic phrase-aware combat timeline
+        run: |
+          set -euo pipefail
+          python scripts/render-learned-anime-combat.py \
+            "$ROOT/final/source.mp4" \
+            "$ROOT/final/music-master.wav" \
+            "$ROOT/learned-combat-grammar.json" \
+            "$ROOT/final/source-analysis/analysis.json" \
+            "$FINAL" \
+            "$ROOT/final/edit-plan.json" \
+            --music-title "$(cat /tmp/music_title)"
+          python scripts/analyze-viral-edit.py "$FINAL" "$ROOT/final/output-analysis"
+
+      - name: Semantic and technical QA
+        run: |
+          set -euo pipefail
+          ffprobe -v error -show_streams -show_format -of json "$FINAL" > "$ROOT/final/ffprobe.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dsh-handoff/anime-semantic-v08')
+          p=json.load(open(root/'final/ffprobe.json'))
+          plan=json.load(open(root/'final/edit-plan.json'))
+          v=next(s for s in p['streams'] if s['codec_type']=='video')
+          a=next(s for s in p['streams'] if s['codec_type']=='audio')
+          d=float(p['format']['duration'])
+          assert int(v['width'])==1080 and int(v['height'])==1920
+          assert 19.90<=d<=20.10,d
+          assert int(a['sample_rate'])==48000
+          assert int(p['format']['size'])>1000000
+          assert plan['editor_mode']=='semantic_phrase_synced_combat',plan.get('editor_mode')
+          assert plan['technical_pass'] is True
+          assert plan['creative_pass'] is True
+          assert plan['semantic_stage_count']>=5,plan['semantic_stage_count']
+          assert plan['impact_sync_count']>=5,plan['impact_sync_count']
+          assert plan['post_edit_cuts_added']>=4,plan['post_edit_cuts_added']
+          assert plan['max_speed_deviation_from_1x']<=0.30,plan['max_speed_deviation_from_1x']
+          assert plan['semantic_segments'][-1]['target_impact_sec']>=15.0
+          manifest={
+            'flow':'v0.8-semantic-combat-editor',
+            'seed_run':32584331575,
+            'reference_ranking':json.load(open(root/'reference-ranking.json')),
+            'music_selection':json.load(open(root/'music-selection.json')),
+            'source_selection':json.load(open(root/'source-selection.json')),
+            'learned_grammar':json.load(open(root/'learned-combat-grammar.json')),
+            'edit_plan':plan,
+            'qa':{'technical_pass':True,'creative_pass':True,'duration_sec':d,'width':int(v['width']),'height':int(v['height']),'semantic_stage_count':plan['semantic_stage_count'],'impact_sync_count':plan['impact_sync_count'],'post_edit_cuts_added':plan['post_edit_cuts_added'],'max_speed_deviation_from_1x':plan['max_speed_deviation_from_1x']}
+          }
+          (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('SEMANTIC QA PASS',manifest['qa'])
+          PY
+
+      - name: Upload semantic v0.8 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-semantic-v08-${{ github.run_id }}
+          path: |
+            dsh-handoff/anime-semantic-v08/reference-ranking.json
+            dsh-handoff/anime-semantic-v08/music-selection.json
+            dsh-handoff/anime-semantic-v08/source-selection.json
+            dsh-handoff/anime-semantic-v08/learned-combat-grammar.json
+            dsh-handoff/anime-semantic-v08/final/edit-plan.json
+            dsh-handoff/anime-semantic-v08/final/output-analysis/analysis.json
+            dsh-handoff/anime-semantic-v08/final/output-analysis/contact.jpg
+            dsh-handoff/anime-semantic-v08/final/SOURCE_MANIFEST.json
+            dsh-handoff/anime-semantic-v08/final/anime_combat_semantic_v08.mp4
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Publish final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -s "$FINAL" ] && [ -s "$ROOT/final/SOURCE_MANIFEST.json" ]; then STATUS=success; PRESENT=true; else STATUS=error; PRESENT=false; fi
+          printf '{"status":"%s","phase":"done","run_id":"%s","artifact_present":%s,"flow":"v0.8-semantic-combat-editor"}\n' "$STATUS" "$GITHUB_RUN_ID" "$PRESENT" > /tmp/status.json
+          C="$(base64 -w0 /tmp/status.json)"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Semantic anime v0.8 status [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_FILE" -f message='Semantic anime v0.8 status [skip ci]' -f content="$C" -f branch=main >/dev/null
+          fi
