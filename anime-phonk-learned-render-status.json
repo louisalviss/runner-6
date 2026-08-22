@@ -1,1 +1,1 @@
-{"status":"running","phase":"rank_references","run_id":"32584331575","artifact_present":false,"flow":"viral-pattern-learning-v0.8-beat-sync"}
+{"status":"success","phase":"done","run_id":"32584331575","artifact_present":true,"flow":"viral-pattern-learning-v0.8-beat-sync"}
