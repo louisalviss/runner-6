@@ -1,0 +1,112 @@
+name: Anime Combat v0.9 DSH Delegated
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "anime-v09-dsh-delegated-trigger.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      DSH_VERSION: "0.1.0-rc.7"
+      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-opencv python3-numpy
+          bash scripts/setup-dsh-media-tools.sh
+
+      - name: Configure DSH runtime
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/dsh-home"
+          cat > "$RUNNER_TEMP/dsh-home/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: https://openrouter.ai/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$RUNNER_TEMP/dsh-home/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: true
+
+      - name: Activate DSH and browser
+        run: |
+          set -euo pipefail
+          bash scripts/activate-dsh-runtime.sh
+          bash scripts/setup-dsh-playwright.sh .
+
+      - name: Give brief to DSH — source and music are NOT preselected
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p dsh-handoff/anime-v09-dsh-delegated
+          TASK='You own media selection for a NEW 20-second vertical anime-combat edit. The orchestrator is deliberately NOT giving you an anime, character, fight, source URL, or song. Use the Playwright browser and current public web information to research and select the production source AND the phonk/funk track yourself. Requirements: readability-first combat; recognizable hook quickly; strong continuous action or clearly separable action units; enough visual context to follow attacker/contact/counter/payoff; low dialogue dependence; good 9:16 resilience; strong source video quality; current social/edit relevance. Avoid the previously used Gojo vs Sukuna and Saitama vs Cosmic Garou sources, and avoid Murder In My Mind and METAMORPHOSIS so this is genuinely different. Compare at least 3 plausible source candidates and at least 3 plausible music candidates. Do not choose based on download convenience. Prefer a public YouTube source that can plausibly be acquired without login and is focused enough for extracting a strong 20-second section. For music, choose a currently recognizable phonk/funk edit track and identify title + artist; the production downloader will resolve the clean official-audio search after your choice. Create dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json with exactly these top-level keys: selected_source, source_candidates, selected_music, music_candidates, rationale. selected_source must contain title,url,anime_or_series,fight_or_scene,why_selected. selected_music must contain title,artist,why_selected. Each candidates array must contain at least 3 objects. rationale must explain why the selected pair should work specifically for a readable 20-second edit. Finish with DSH_SELECTION_READY.'
+          timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK"
+          test -s dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json
+          python - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json'))
+          assert p['selected_source']['url'].startswith('http')
+          assert len(p['source_candidates']) >= 3
+          assert len(p['music_candidates']) >= 3
+          assert p['selected_music']['title'] and p['selected_music']['artist']
+          print(json.dumps(p,ensure_ascii=False,indent=2))
+          PY
+
+      - name: DSH-selected acquisition + Runner render
+        run: bash scripts/run-anime-v09-dsh-delegated-ci.sh
+
+      - name: Upload candidate for orchestrator visual review
+        uses: actions/upload-artifact@v4
+        with:
+          name: anime-v09-dsh-delegated-${{ github.run_id }}
+          path: |
+            dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json
+            dsh-handoff/anime-v09-dsh-delegated/final/edit-plan.json
+            dsh-handoff/anime-v09-dsh-delegated/final/output-analysis/analysis.json
+            dsh-handoff/anime-v09-dsh-delegated/final/output-analysis/contact.jpg
+            dsh-handoff/anime-v09-dsh-delegated/final/SOURCE_MANIFEST.json
+            dsh-handoff/anime-v09-dsh-delegated/final/anime_combat_v09_dsh.mp4
+          retention-days: 2
+          if-no-files-found: error
