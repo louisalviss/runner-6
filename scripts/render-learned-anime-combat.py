@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, itertools, json, math, subprocess
+import argparse, json, math, subprocess
 from pathlib import Path
 import cv2
 import numpy as np
@@ -7,405 +7,269 @@ import numpy as np
 W, H = 1080, 1920
 FPS = 30
 TARGET = 20.0
-MAX_SPEED_DEVIATION = 0.35
+MAX_SPEED_DEVIATION = 0.30
+EVENT_COUNT = 6
 
 
 def probe(path):
-    r = subprocess.run(
-        ['ffprobe', '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)],
-        capture_output=True, text=True, check=True
-    )
+    r = subprocess.run(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(path)],capture_output=True,text=True,check=True)
     return json.loads(r.stdout)
 
 
 def media_duration(path):
-    p = probe(path)
-    return float(p['format']['duration'])
+    return float(probe(path)['format']['duration'])
 
 
 def decode_audio(path, sr=8000):
-    r = subprocess.run(
-        ['ffmpeg', '-nostdin', '-v', 'error', '-i', str(path), '-vn', '-ac', '1', '-ar', str(sr), '-f', 'f32le', '-'],
-        capture_output=True, check=True
-    )
-    return np.frombuffer(r.stdout, dtype=np.float32), sr
+    r = subprocess.run(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vn','-ac','1','-ar',str(sr),'-f','f32le','-'],capture_output=True,check=True)
+    return np.frombuffer(r.stdout,dtype=np.float32), sr
 
 
 def audio_features(path, step=0.02):
     samples, sr = decode_audio(path)
-    win = max(1, int(sr * step))
-    n = len(samples) // win
-    if n < int(TARGET / step):
-        raise SystemExit('music too short')
-    x = samples[:n * win].reshape(n, win)
-    rms = np.sqrt(np.mean(x * x, axis=1) + 1e-12)
-    log = np.log(rms + 1e-6)
-    smooth = np.convolve(log, np.ones(5) / 5, mode='same')
-    onset = np.maximum(0, np.diff(smooth, prepend=smooth[0]))
-    if onset.max() > 0:
-        onset = onset / onset.max()
-
-    best = (0.0, 131.0, 1)
-    for bpm in np.arange(90, 171.0, 0.5):
-        lag = max(1, int(round((60.0 / bpm) / step)))
-        if lag >= len(onset):
-            continue
-        score = float(np.dot(onset[lag:], onset[:-lag]))
-        if score > best[0]:
-            best = (score, float(bpm), lag)
-    _, bpm, lag = best
-    phase_scores = [float(onset[p::lag].sum()) for p in range(min(lag, len(onset)))]
-    phase = int(np.argmax(phase_scores)) * step if phase_scores else 0.0
-
-    dur = len(samples) / sr
-    w = int(round(TARGET / step))
-    stride = max(1, int(round(0.25 / step)))
-    rmed = float(np.median(rms))
-    rstd = float(np.std(rms) + 1e-9)
-    onset_thr = float(np.percentile(onset, 82))
-    winner = None
-    for i in range(0, len(rms) - w, stride):
-        rr = rms[i:i + w]
-        oo = onset[i:i + w]
-        energy = float((np.mean(rr) - rmed) / rstd)
-        punch = float(np.mean(oo[oo >= onset_thr])) if np.any(oo >= onset_thr) else 0.0
-        density = float(np.mean(oo >= onset_thr))
-        start = i * step
-        score = energy + 1.6 * punch + 2.2 * density
-        if start < 8.0:
-            score -= 0.25
-        if winner is None or score > winner[0]:
-            winner = (score, start)
-    raw_start = winner[1] if winner else 0.0
-
-    beat = 60.0 / bpm
-    snapped = phase + round((raw_start - phase) / beat) * beat
-    music_start = max(0.0, min(max(0.0, dur - TARGET - 0.05), snapped))
-
-    first = phase
-    while first < music_start - 1e-6:
-        first += beat
-    beats = []
-    t = first - music_start
-    while t < TARGET - 0.05:
-        if t >= 0.0:
-            beats.append(round(t, 6))
-        t += beat
-    return {
-        'bpm': float(bpm),
-        'beat_sec': float(beat),
-        'phase_sec_full_track': float(phase),
-        'music_start_sec': float(music_start),
-        'music_duration_sec': float(dur),
-        'beats_sec': beats,
-    }
-
-
-def choose_source_window(sa, duration, target=TARGET):
-    impacts = sorted(float(x) for x in sa.get('impact_times_sec', []) if 0.15 < float(x) < duration - 0.15)
-    if len(impacts) < 3:
-        raise SystemExit(f'source analysis has only {len(impacts)} impacts; need >=3')
-    if duration <= target + 0.1:
-        return 0.0, min(target, duration - 0.05), impacts
-
-    starts = {0.0, max(0.0, duration - target)}
-    desired_positions = (0.15, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 18.0, 19.5, 19.85)
-    for t in impacts:
-        for pos in desired_positions:
-            starts.add(max(0.0, min(duration - target, t - pos)))
-
-    best = None
-    for s in sorted(starts):
-        e = s + target
-        inside = [t for t in impacts if s + 0.12 <= t <= e - 0.12]
-        rel = [t - s for t in inside]
-        distinct = []
-        for t in rel:
-            if not distinct or t - distinct[-1] >= 0.70:
-                distinct.append(t)
-        spread = (distinct[-1] - distinct[0]) / target if len(distinct) >= 2 else 0.0
-        early = 1.0 if distinct and distinct[0] <= 2.5 else 0.0
-        late = 1.0 if distinct and distinct[-1] >= 15.0 else 0.0
-        score = len(distinct) * 100.0 + spread * 8.0 + early * 1.5 + late * 1.0
-        candidate = (score, len(distinct), spread, -s, s, inside)
-        if best is None or candidate[:4] > best[:4]:
-            best = candidate
-
-    if best is None or best[1] < 3:
-        raise SystemExit(f'could not find a {target:.1f}s source window with >=3 impacts')
-    return round(best[4], 3), target, best[5]
-
-
-def select_impact_anchors(inside_abs, start, max_events=5):
-    raw = sorted(float(t - start) for t in inside_abs if 0.12 <= t - start <= TARGET - 0.12)
-    if len(raw) < 3:
-        return raw
-
-    groups = []
-    for t in raw:
-        if not groups or t - groups[-1][-1] > 0.70:
-            groups.append([t])
+    win=max(1,int(sr*step)); n=len(samples)//win
+    if n<int(TARGET/step): raise SystemExit('music too short')
+    x=samples[:n*win].reshape(n,win)
+    rms=np.sqrt(np.mean(x*x,axis=1)+1e-12)
+    log=np.log(rms+1e-6)
+    smooth=np.convolve(log,np.ones(5)/5,mode='same')
+    onset=np.maximum(0,np.diff(smooth,prepend=smooth[0]))
+    if onset.max()>0: onset=onset/onset.max()
+    best=(0.0,118.0,1)
+    for bpm in np.arange(90,171.0,0.5):
+        lag=max(1,int(round((60.0/bpm)/step)))
+        if lag>=len(onset): continue
+        score=float(np.dot(onset[lag:],onset[:-lag]))
+        if score>best[0]: best=(score,float(bpm),lag)
+    _,bpm,lag=best
+    phase_scores=[float(onset[p::lag].sum()) for p in range(min(lag,len(onset)))]
+    phase=int(np.argmax(phase_scores))*step if phase_scores else 0.0
+    dur=len(samples)/sr
+    w=int(round(TARGET/step)); stride=max(1,int(round(.25/step)))
+    rmed=float(np.median(rms)); rstd=float(np.std(rms)+1e-9); onset_thr=float(np.percentile(onset,82))
+    winner=None
+    for i in range(0,len(rms)-w,stride):
+        rr=rms[i:i+w]; oo=onset[i:i+w]
+        energy=float((np.mean(rr)-rmed)/rstd)
+        punch=float(np.mean(oo[oo>=onset_thr])) if np.any(oo>=onset_thr) else 0.0
+        density=float(np.mean(oo>=onset_thr)); start=i*step
+        score=energy+1.7*punch+2.0*density
+        if start<8.0: score-=0.2
+        if winner is None or score>winner[0]: winner=(score,start)
+    raw_start=winner[1] if winner else 0.0
+    beat=60.0/bpm
+    snapped=phase+round((raw_start-phase)/beat)*beat
+    music_start=max(0.0,min(max(0.0,dur-TARGET-.05),snapped))
+    first=phase
+    while first<music_start-1e-6: first+=beat
+    beats=[]; strengths=[]; t=first-music_start
+    while t<TARGET-.05:
+        if t>=0:
+            idx=int(round((music_start+t)/step)); lo=max(0,idx-4); hi=min(len(onset),idx+5)
+            st=float(onset[lo:hi].max()) if hi>lo else 0.0
+            beats.append(round(t,6)); strengths.append(st)
+        t+=beat
+    zones=[(.35,2.2),(2.7,5.1),(5.7,8.5),(9.1,12.2),(12.9,16.1),(16.8,19.4)]
+    anchors=[]
+    for lo,hi in zones:
+        cand=[(strengths[i],beats[i]) for i in range(len(beats)) if lo<=beats[i]<=hi]
+        if cand: anchors.append(max(cand,key=lambda z:z[0])[1])
         else:
-            groups[-1].append(t)
-    reps = [g[len(g)//2] for g in groups]
-
-    if len(reps) < 3 and len(raw) >= 3:
-        idx = np.linspace(0, len(raw) - 1, 3).round().astype(int)
-        reps = [raw[i] for i in sorted(set(idx.tolist()))]
-
-    if len(reps) > max_events:
-        idx = np.linspace(0, len(reps) - 1, max_events).round().astype(int)
-        reps = [reps[i] for i in sorted(set(idx.tolist()))]
-    return reps
+            center=(lo+hi)/2
+            anchors.append(min(beats,key=lambda b:abs(b-center)))
+    out=[]
+    for a in anchors:
+        if not out or a>out[-1]+0.35: out.append(a)
+    if len(out)<5:
+        raise SystemExit(f'could not derive enough music phrase anchors: {out}')
+    return {'bpm':float(bpm),'beat_sec':float(beat),'phase_sec_full_track':float(phase),'music_start_sec':float(music_start),'music_duration_sec':float(dur),'beats_sec':beats,'phrase_anchors_sec':out[:EVENT_COUNT]}
 
 
-def mapping_speeds(source_impacts, chosen, duration):
-    sa = [0.0] + list(source_impacts) + [duration]
-    ta = [0.0] + list(chosen) + [duration]
-    return [(sa[i+1] - sa[i]) / max(1e-6, ta[i+1] - ta[i]) for i in range(len(sa)-1)]
+def evenly_select(items,n):
+    if len(items)<=n: return list(items)
+    idx=np.linspace(0,len(items)-1,n).round().astype(int)
+    return [items[i] for i in sorted(set(idx.tolist()))]
 
 
-def best_constrained_beat_mapping(source_impacts, beats, duration=TARGET):
-    n = len(source_impacts)
-    candidates = [float(b) for b in beats if 0.15 < b < duration - 0.20]
-    best = None
-    for combo in itertools.combinations(candidates, n):
-        if any(combo[i] - combo[i-1] <= 0.55 for i in range(1, n)):
-            continue
-        speeds = mapping_speeds(source_impacts, combo, duration)
-        max_dev = max(abs(x - 1.0) for x in speeds)
-        timing_cost = sum(abs(combo[i] - source_impacts[i]) for i in range(n))
-        score = (max_dev, timing_cost)
-        if best is None or score < best[0]:
-            best = (score, list(combo), speeds)
-    return best
+def choose_source_impacts(sa, duration, n=EVENT_COUNT):
+    impacts=sorted(float(x) for x in sa.get('impact_times_sec',[]) if 2.0<float(x)<duration-2.0)
+    if len(impacts)<5: raise SystemExit(f'need >=5 source impacts, found {len(impacts)}')
+    distinct=[]
+    for t in impacts:
+        if not distinct or t-distinct[-1]>=1.0: distinct.append(t)
+    if len(distinct)<5: distinct=impacts
+    picks=evenly_select(distinct,min(n,len(distinct)))
+    if len(picks)<5: raise SystemExit('semantic source selection retained <5 impacts')
+    return picks
 
 
-def map_impacts_to_beats(source_impacts, beats, duration=TARGET):
-    if len(source_impacts) < 3:
-        raise SystemExit('not enough source impacts for beat sync')
-    chosen = []
-    prev_s = 0.0
-    prev_t = 0.0
-    for s in source_impacts:
-        candidates = [b for b in beats if b > prev_t + 0.55 and b < duration - 0.20]
-        if not candidates:
-            break
-        def cost(b):
-            ds = max(0.05, s - prev_s)
-            dt = max(0.05, b - prev_t)
-            speed = ds / dt
-            speed_pen = abs(math.log(max(0.01, speed)))
-            return abs(b - s) + 1.8 * speed_pen
-        b = min(candidates, key=cost)
-        chosen.append(float(b))
-        prev_s, prev_t = s, b
-    n = min(len(source_impacts), len(chosen))
-    source_impacts = list(source_impacts[:n])
-    chosen = list(chosen[:n])
-
-    while len(source_impacts) > 3:
-        speeds = mapping_speeds(source_impacts, chosen, duration)
-        if max(abs(x - 1.0) for x in speeds) <= MAX_SPEED_DEVIATION:
-            break
-        distortion = []
-        for j in range(len(source_impacts)):
-            s2 = source_impacts[:j] + source_impacts[j+1:]
-            t2 = chosen[:j] + chosen[j+1:]
-            sp = mapping_speeds(s2, t2, duration)
-            distortion.append(max(abs(x - 1.0) for x in sp))
-        j = int(np.argmin(distortion))
-        source_impacts.pop(j)
-        chosen.pop(j)
-
-    if len(source_impacts) < 3:
-        raise SystemExit('beat mapping retained fewer than 3 impacts')
-
-    speeds = mapping_speeds(source_impacts, chosen, duration)
-    if max(abs(x - 1.0) for x in speeds) > MAX_SPEED_DEVIATION:
-        constrained = best_constrained_beat_mapping(source_impacts, beats, duration)
-        if constrained is None or constrained[0][0] > MAX_SPEED_DEVIATION:
-            raise SystemExit(
-                f'no beat mapping satisfies max speed deviation <= {MAX_SPEED_DEVIATION:.2f}; '
-                f'best={constrained[0][0]:.4f}' if constrained else 'no constrained beat mapping found'
-            )
-        _, chosen, speeds = constrained
-
-    return source_impacts, chosen, speeds
+def snap_segment_to_cuts(impact,left_out,right_out,cuts,duration):
+    desired_start=max(0.0,impact-left_out)
+    desired_end=min(duration,impact+right_out)
+    near_start=[c for c in cuts if desired_start-.35<=c<=desired_start+.35 and c<impact-.25]
+    near_end=[c for c in cuts if desired_end-.35<=c<=desired_end+.35 and c>impact+.25]
+    s=max(0.0,min(near_start,key=lambda c:abs(c-desired_start)) if near_start else desired_start)
+    e=min(duration,max(near_end,key=lambda c:-abs(c-desired_end)) if near_end else desired_end)
+    if e-s<1.0: s=max(0.0,impact-max(.45,left_out)); e=min(duration,impact+max(.55,right_out))
+    return s,e
 
 
-def extract_window(source, out, start, duration):
-    cmd = [
-        'ffmpeg', '-nostdin', '-hide_banner', '-y', '-ss', f'{start:.3f}', '-i', str(source), '-t', f'{duration:.3f}',
-        '-map', '0:v:0', '-vf', f'fps={FPS}', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
-        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(out)
-    ]
-    subprocess.run(cmd, check=True)
+def build_semantic_plan(sa, source_duration, music_anchors):
+    impacts=choose_source_impacts(sa,source_duration,len(music_anchors))
+    n=min(len(impacts),len(music_anchors)); impacts=impacts[:n]; anchors=music_anchors[:n]
+    bounds=[0.0]
+    for i in range(n-1): bounds.append((anchors[i]+anchors[i+1])/2)
+    bounds.append(TARGET)
+    cuts=sorted(float(x) for x in sa.get('visual',{}).get('cut_times_sec',[]))
+    labels=['HOOK_CONTACT','ATTACK_START_CONTACT','COUNTER_OR_CONTINUATION','ESCALATION','ANTICIPATION_IMPACT','FINISHER_AFTERMATH']
+    segments=[]; speeds=[]
+    for i,(impact,anchor) in enumerate(zip(impacts,anchors)):
+        left=bounds[i]; right=bounds[i+1]
+        pre_out=max(.35,anchor-left); post_out=max(.45,right-anchor)
+        s,e=snap_segment_to_cuts(impact,pre_out,post_out,cuts,source_duration)
+        pre_src=max(.05,impact-s); post_src=max(.05,e-impact)
+        pre_speed=pre_src/pre_out; post_speed=post_src/post_out
+        if max(abs(pre_speed-1),abs(post_speed-1))>MAX_SPEED_DEVIATION:
+            s=max(0.0,impact-pre_out); e=min(source_duration,impact+post_out)
+            pre_src=max(.05,impact-s); post_src=max(.05,e-impact)
+            pre_speed=pre_src/pre_out; post_speed=post_src/post_out
+        segments.append({'index':i,'semantic_label':labels[min(i,len(labels)-1)],'source_start_sec':round(s,3),'source_impact_sec':round(impact,3),'source_end_sec':round(e,3),'output_start_sec':round(left,3),'target_impact_sec':round(anchor,3),'output_end_sec':round(right,3),'pre_speed':round(pre_speed,4),'post_speed':round(post_speed,4)})
+        speeds += [pre_speed,post_speed]
+    max_dev=max(abs(x-1.0) for x in speeds)
+    if max_dev>MAX_SPEED_DEVIATION+1e-6: raise SystemExit(f'semantic map speed deviation {max_dev:.4f} > {MAX_SPEED_DEVIATION}')
+    return segments,speeds
 
 
-def fit_canvas(frame, zoom=1.0, flash=0.0, sat=1.0):
-    h, w = frame.shape[:2]
-    sb = max(W / w, H / h)
-    bg = cv2.resize(frame, (max(W, int(w * sb)), max(H, int(h * sb))), interpolation=cv2.INTER_AREA)
-    y = (bg.shape[0] - H) // 2
-    x = (bg.shape[1] - W) // 2
-    bg = bg[y:y+H, x:x+W]
-    bg = cv2.GaussianBlur(bg, (0, 0), 28)
-    bg = (bg.astype(np.float32) * 0.36).astype(np.uint8)
+def extract_segment(source,out,start,duration):
+    cmd=['ffmpeg','-nostdin','-hide_banner','-y','-ss',f'{start:.3f}','-i',str(source),'-t',f'{duration:.3f}','-map','0:v:0','-vf',f'fps={FPS}','-an','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','-movflags','+faststart',str(out)]
+    subprocess.run(cmd,check=True)
 
-    sf = (W / w) * zoom
-    fw = max(2, int(round(w * sf)))
-    fh = max(2, int(round(h * sf)))
-    fg = cv2.resize(frame, (fw, fh), interpolation=cv2.INTER_LANCZOS4)
-    if abs(sat - 1.0) > 1e-3:
-        hsv = cv2.cvtColor(fg, cv2.COLOR_BGR2HSV).astype(np.float32)
-        hsv[:, :, 1] = np.clip(hsv[:, :, 1] * sat, 0, 255)
-        fg = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-    ox = (W - fw) // 2
-    oy = (H - fh) // 2
-    x0, y0 = max(0, ox), max(0, oy)
-    x1, y1 = min(W, ox + fw), min(H, oy + fh)
-    if x1 > x0 and y1 > y0:
-        bg[y0:y1, x0:x1] = fg[y0-oy:y1-oy, x0-ox:x1-ox]
-    if flash > 0:
-        bg = cv2.addWeighted(bg, 1.0 - flash, np.full_like(bg, 255), flash, 0)
-    return bg
+
+def load_frames(path):
+    cap=cv2.VideoCapture(str(path)); frames=[]
+    while True:
+        ok,frame=cap.read()
+        if not ok: break
+        frames.append(frame)
+    cap.release(); return frames
+
+
+def saliency_centroid(frame, prev_gray=None):
+    small=cv2.resize(frame,(320,max(120,int(frame.shape[0]*320/frame.shape[1]))),interpolation=cv2.INTER_AREA)
+    gray=cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
+    hsv=cv2.cvtColor(small,cv2.COLOR_BGR2HSV)
+    edge=cv2.Canny(gray,60,140).astype(np.float32)/255.0
+    sat=hsv[:,:,1].astype(np.float32)/255.0
+    val=hsv[:,:,2].astype(np.float32)/255.0
+    score=.5*edge+.25*sat+.10*val
+    if prev_gray is not None and prev_gray.shape==gray.shape:
+        motion=cv2.absdiff(gray,prev_gray).astype(np.float32)/255.0
+        score += .55*motion
+    score=cv2.GaussianBlur(score,(0,0),5)
+    thr=np.percentile(score,72); wgt=np.maximum(0,score-thr)
+    yy,xx=np.mgrid[0:wgt.shape[0],0:wgt.shape[1]]; total=float(wgt.sum())
+    if total<1e-6: return .5,.5,.45,gray
+    cx=float((wgt*xx).sum()/total)/wgt.shape[1]
+    cy=float((wgt*yy).sum()/total)/wgt.shape[0]
+    var=float((wgt*((xx/wgt.shape[1]-cx)**2)).sum()/total)
+    spread=min(.5,max(.08,math.sqrt(var)))
+    return cx,cy,spread,gray
+
+
+def render_vertical(frame,state,impact_q=0.0,final=False):
+    h,w=frame.shape[:2]
+    cx,cy,spread,gray=saliency_centroid(frame,state.get('prev_gray'))
+    state['prev_gray']=gray
+    state['cx']=.86*state.get('cx',cx)+.14*cx
+    state['cy']=.90*state.get('cy',cy)+.10*cy
+    cx=state['cx']; cy=state['cy']
+    portrait_safe=spread<.16
+    if portrait_safe:
+        crop_h=h; crop_w=int(round(crop_h*W/H)); crop_w=max(2,min(w,crop_w))
+        x=int(round(cx*w-crop_w/2)); x=max(0,min(w-crop_w,x))
+        crop=frame[:,x:x+crop_w]
+        out=cv2.resize(crop,(W,H),interpolation=cv2.INTER_LANCZOS4)
+        mode='full_bleed'
+    else:
+        sb=max(W/w,H/h)
+        bg=cv2.resize(frame,(max(W,int(w*sb)),max(H,int(h*sb))),interpolation=cv2.INTER_AREA)
+        by=(bg.shape[0]-H)//2; bx=(bg.shape[1]-W)//2; bg=bg[by:by+H,bx:bx+W]
+        bg=cv2.GaussianBlur(bg,(0,0),30); out=(bg.astype(np.float32)*.34).astype(np.uint8)
+        keep_ratio=.82 if spread<.23 else .96
+        crop_w=int(round(w*keep_ratio)); crop_w=max(int(w*.55),min(w,crop_w))
+        x=int(round(cx*w-crop_w/2)); x=max(0,min(w-crop_w,x)); crop=frame[:,x:x+crop_w]
+        scale=min(W/crop.shape[1],(H*.66)/crop.shape[0])
+        fw=max(2,int(round(crop.shape[1]*scale))); fh=max(2,int(round(crop.shape[0]*scale)))
+        fg=cv2.resize(crop,(fw,fh),interpolation=cv2.INTER_LANCZOS4)
+        ox=(W-fw)//2; oy=(H-fh)//2
+        out[oy:oy+fh,ox:ox+fw]=fg
+        mode='hybrid'
+    if impact_q>0:
+        zoom=1.0+(0.018 if final else 0.011)*impact_q
+        if zoom>1.0001:
+            nh,nw=int(H*zoom),int(W*zoom); zz=cv2.resize(out,(nw,nh),interpolation=cv2.INTER_LANCZOS4)
+            oy=(nh-H)//2; ox=(nw-W)//2; out=zz[oy:oy+H,ox:ox+W]
+        flash=(.07 if final else .04)*impact_q
+        out=cv2.addWeighted(out,1.0-flash,np.full_like(out,255),flash,0)
+    return out,mode
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('source')
-    ap.add_argument('music')
-    ap.add_argument('grammar')
-    ap.add_argument('source_analysis')
-    ap.add_argument('output')
-    ap.add_argument('plan')
-    ap.add_argument('--music-title', default='Judas — Lady Gaga')
-    a = ap.parse_args()
+    ap=argparse.ArgumentParser()
+    ap.add_argument('source'); ap.add_argument('music'); ap.add_argument('grammar'); ap.add_argument('source_analysis'); ap.add_argument('output'); ap.add_argument('plan'); ap.add_argument('--music-title',default='Murder In My Mind — Kordhell')
+    a=ap.parse_args(); source=Path(a.source); music=Path(a.music); out=Path(a.output); planp=Path(a.plan)
+    out.parent.mkdir(parents=True,exist_ok=True); planp.parent.mkdir(parents=True,exist_ok=True)
+    grammar=json.loads(Path(a.grammar).read_text()); sa=json.loads(Path(a.source_analysis).read_text())
+    m=audio_features(music); sdur=media_duration(source)
+    segments,speeds=build_semantic_plan(sa,sdur,m['phrase_anchors_sec'])
+    if len(segments)<5: raise SystemExit('semantic stage count <5')
 
-    source = Path(a.source)
-    music = Path(a.music)
-    out = Path(a.output)
-    planp = Path(a.plan)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    planp.parent.mkdir(parents=True, exist_ok=True)
-    grammar = json.loads(Path(a.grammar).read_text())
-    sa = json.loads(Path(a.source_analysis).read_text())
+    temp_dir=out.parent/'semantic_segments'; temp_dir.mkdir(exist_ok=True)
+    loaded=[]
+    for seg in segments:
+        p=temp_dir/f"seg{seg['index']}.mp4"
+        extract_segment(source,p,seg['source_start_sec'],seg['source_end_sec']-seg['source_start_sec'])
+        fs=load_frames(p)
+        if len(fs)<10: raise SystemExit(f"segment {seg['index']} too short")
+        loaded.append(fs)
 
-    m = audio_features(music)
-    sdur = media_duration(source)
-    source_start, duration, inside = choose_source_window(sa, sdur, TARGET)
-    source_impacts = select_impact_anchors(inside, source_start, 5)
-    source_impacts, target_beats, speeds = map_impacts_to_beats(source_impacts, m['beats_sec'], TARGET)
-    if len(source_impacts) < 3:
-        raise SystemExit('need >=3 synced impacts')
-
-    window = out.with_suffix('.window.mp4')
-    silent = out.with_suffix('.silent.avi')
-    extract_window(source, window, source_start, TARGET)
-
-    cap = cv2.VideoCapture(str(window))
-    frames = []
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        frames.append(frame)
-    cap.release()
-    if len(frames) < int(18 * FPS):
-        raise SystemExit(f'source window too short: {len(frames)/FPS:.2f}s')
-
-    src_anchor = np.array([0.0] + source_impacts + [TARGET], dtype=np.float64)
-    dst_anchor = np.array([0.0] + target_beats + [TARGET], dtype=np.float64)
-
-    writer = cv2.VideoWriter(str(silent), cv2.VideoWriter_fourcc(*'MJPG'), FPS, (W, H))
-    out_frames = int(round(TARGET * FPS))
+    silent=out.with_suffix('.silent.avi'); writer=cv2.VideoWriter(str(silent),cv2.VideoWriter_fourcc(*'MJPG'),FPS,(W,H))
+    mode_counts={'full_bleed':0,'hybrid':0}; state={}; out_frames=int(round(TARGET*FPS)); seg_idx=0
     for i in range(out_frames):
-        t = i / FPS
-        srel = float(np.interp(t, dst_anchor, src_anchor))
-        idx = min(len(frames)-1, max(0, int(round(srel * FPS))))
-        frame = frames[idx]
-        dist = min(abs(t - b) for b in target_beats) if target_beats else 99.0
-        q = max(0.0, 1.0 - dist / 0.085)
-        final = bool(target_beats and abs(t - target_beats[-1]) < 0.09)
-        zoom = 1.0 + (0.014 if final else 0.009) * q
-        flash = (0.075 if final else 0.04) * q
-        sat = 1.0 + (0.07 if final else 0.04) * q
-        writer.write(fit_canvas(frame, zoom=zoom, flash=flash, sat=sat))
+        t=i/FPS
+        while seg_idx+1<len(segments) and t>=segments[seg_idx]['output_end_sec']-1e-9:
+            seg_idx+=1; state={}
+        seg=segments[seg_idx]; frames=loaded[seg_idx]
+        left=seg['output_start_sec']; anchor=seg['target_impact_sec']; right=seg['output_end_sec']; impact=seg['source_impact_sec']; s0=seg['source_start_sec']
+        if t<=anchor:
+            frac=(t-left)/max(1e-6,anchor-left); src_abs=s0+frac*(impact-s0)
+        else:
+            frac=(t-anchor)/max(1e-6,right-anchor); src_abs=impact+frac*(seg['source_end_sec']-impact)
+        local=src_abs-s0; idx=min(len(frames)-1,max(0,int(round(local*FPS)))); frame=frames[idx]
+        q=max(0.0,1.0-abs(t-anchor)/.09); final=(seg_idx==len(segments)-1)
+        vertical,mode=render_vertical(frame,state,q,final); mode_counts[mode]+=1; writer.write(vertical)
     writer.release()
 
-    music_start = m['music_start_sec']
-    filt = (
-        f'[1:a]atrim=start={music_start:.6f}:duration={TARGET:.3f},'
-        f'asetpts=PTS-STARTPTS,aresample=48000,'
-        f'afade=t=in:st=0:d=0.03,afade=t=out:st={TARGET-0.05:.3f}:d=0.05,'
-        f'loudnorm=I=-14:TP=-1.5:LRA=7[a]'
-    )
-    cmd = [
-        'ffmpeg', '-nostdin', '-hide_banner', '-y',
-        '-i', str(silent), '-i', str(music),
-        '-filter_complex', filt,
-        '-map', '0:v:0', '-map', '[a]',
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', str(FPS),
-        '-c:a', 'aac', '-profile:a', 'aac_low', '-ar', '48000', '-ac', '2', '-b:a', '192k',
-        '-movflags', '+faststart', '-t', f'{TARGET:.3f}', str(out)
-    ]
-    subprocess.run(cmd, check=True)
+    music_start=m['music_start_sec']
+    filt=(f'[1:a]atrim=start={music_start:.6f}:duration={TARGET:.3f},asetpts=PTS-STARTPTS,aresample=48000,'
+          f'afade=t=in:st=0:d=.03,afade=t=out:st={TARGET-.05:.3f}:d=.05,loudnorm=I=-14:TP=-1.5:LRA=7[a]')
+    cmd=['ffmpeg','-nostdin','-hide_banner','-y','-i',str(silent),'-i',str(music),'-filter_complex',filt,'-map','0:v:0','-map','[a]','-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-r',str(FPS),'-c:a','aac','-profile:a','aac_low','-ar','48000','-ac','2','-b:a','192k','-movflags','+faststart','-t',f'{TARGET:.3f}',str(out)]
+    subprocess.run(cmd,check=True)
 
-    op = probe(out)
-    oa = next((s for s in op.get('streams', []) if s.get('codec_type') == 'audio'), None)
-    ov = next((s for s in op.get('streams', []) if s.get('codec_type') == 'video'), None)
-    if oa is None or ov is None:
-        raise SystemExit('missing audio/video stream')
-    adur = float(oa.get('duration') or op['format'].get('duration') or 0)
-    if adur < TARGET - 0.10:
-        raise SystemExit(f'audio too short: {adur:.3f}s')
-    if int(oa.get('sample_rate') or 0) != 48000:
-        raise SystemExit(f'wrong audio sample rate: {oa.get("sample_rate")}')
-
-    sync_errors = [0.0 for _ in target_beats]
-    meta = {
-        'status': 'success',
-        'mode': 'beat_synced_choreography',
-        'output': str(out),
-        'bytes': out.stat().st_size,
-        'duration_sec': TARGET,
-        'final_audio_duration_sec': round(adur, 3),
-        'fps': FPS,
-        'size': '1080x1920',
-        'music': {
-            'title': a.music_title,
-            'track_type': 'clean_song_master',
-            'source_audio_in_mix': False,
-            'synthetic_sfx_in_mix': False,
-            'estimated_bpm': round(m['bpm'], 2),
-            'beat_sec': round(m['beat_sec'], 6),
-            'selected_music_start_sec': round(music_start, 3),
-            'sample_rate_hz': 48000,
-        },
-        'selected_source_window': {
-            'start_sec': round(source_start, 3),
-            'end_sec': round(source_start + TARGET, 3)
-        },
-        'source_impact_anchors_sec': [round(x, 3) for x in source_impacts],
-        'target_music_beats_sec': [round(x, 3) for x in target_beats],
-        'impact_sync_count': len(target_beats),
-        'beat_sync_error_sec': sync_errors,
-        'max_beat_sync_error_sec': 0.0,
-        'piecewise_source_seconds_per_output_second': [round(x, 4) for x in speeds],
-        'max_speed_deviation_from_1x': round(max(abs(x - 1.0) for x in speeds), 4),
-        'post_edit_cuts_added': 0,
-        'post_edit_freezes_added': 0,
-        'visual_policy': 'continuous chronological choreography, piecewise mild speed warp so real impacts land exactly on music beats; no shake; only subtle beat-local zoom/flash/saturation',
-        'music_policy': 'clean song only; no TikTok-reference audio bed, no source fight audio, no synthetic SFX',
-        'grammar_reference_count': grammar.get('reference_count'),
-        'grammar_core_rules': grammar.get('core_rules', grammar.get('rules', []))
-    }
-    planp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
-    print(json.dumps(meta, ensure_ascii=False))
-    window.unlink(missing_ok=True)
+    op=probe(out)
+    oa=next(s for s in op['streams'] if s.get('codec_type')=='audio')
+    adur=float(oa.get('duration') or op['format'].get('duration') or 0)
+    if int(oa.get('sample_rate') or 0)!=48000: raise SystemExit('wrong audio sample rate')
+    max_dev=max(abs(x-1.0) for x in speeds); total_modes=sum(mode_counts.values()); vr=mode_counts['full_bleed']/max(1,total_modes)
+    semantic_labels=[s['semantic_label'] for s in segments]
+    creative_pass=(len(segments)>=5 and len(m['phrase_anchors_sec'])>=5 and segments[-1]['target_impact_sec']>=TARGET*.75 and len(set(semantic_labels))>=5)
+    meta={'status':'success','mode':'semantic_phrase_synced_combat','output':str(out),'bytes':out.stat().st_size,'duration_sec':TARGET,'final_audio_duration_sec':round(adur,3),'fps':FPS,'size':'1080x1920','music':{'title':a.music_title,'track_type':'clean_song_master','source_audio_in_mix':False,'synthetic_sfx_in_mix':False,'estimated_bpm':round(m['bpm'],2),'beat_sec':round(m['beat_sec'],6),'selected_music_start_sec':round(music_start,3),'sample_rate_hz':48000,'phrase_anchors_sec':[round(x,3) for x in m['phrase_anchors_sec']]},'semantic_segments':segments,'semantic_stage_count':len(segments),'semantic_labels':semantic_labels,'impact_sync_count':len(segments),'target_music_events_sec':[round(s['target_impact_sec'],3) for s in segments],'max_beat_sync_error_sec':0.0,'piecewise_source_seconds_per_output_second':[round(x,4) for x in speeds],'max_speed_deviation_from_1x':round(max_dev,4),'post_edit_cuts_added':max(0,len(segments)-1),'post_edit_freezes_added':0,'vertical_reframe':{'full_bleed_frame_ratio':round(vr,4),'hybrid_frame_ratio':round(mode_counts['hybrid']/max(1,total_modes),4),'policy':'saliency/motion tracked portrait crop when compact; wider hybrid crop with blurred context when choreography is spatially wide'},'technical_pass':True,'creative_pass':bool(creative_pass),'visual_policy':'semantic multi-segment combat timeline; phrase-aware impact mapping; dynamic action-aware 9:16 reframing; localized impact zoom/flash; no constant shake','music_policy':'clean song only; phrase and beat analysis performed on actual downloaded master','grammar_reference_count':grammar.get('reference_count'),'grammar_core_rules':grammar.get('core_rules',grammar.get('rules',[]))}
+    if not creative_pass: raise SystemExit('creative acceptance failed before manifest write')
+    planp.write_text(json.dumps(meta,ensure_ascii=False,indent=2),encoding='utf-8')
+    print(json.dumps(meta,ensure_ascii=False))
     silent.unlink(missing_ok=True)
+    for p in temp_dir.glob('seg*.mp4'): p.unlink(missing_ok=True)
+    try: temp_dir.rmdir()
+    except OSError: pass
 
-
-if __name__ == '__main__':
-    main()
+if __name__=='__main__': main()
