@@ -1,3 +1,3 @@
-2026-08-22T17:12:00+07:00
+2026-08-22T17:20:00+07:00
 Run one end-to-end anime combat + phonk viral TikTok production using the canonical viral-pattern-learning flow. AI creative target: readable high-impact anime fight edit for TikTok/Reels/Shorts, ~20s, 9:16. Use observed-performance reference ranking, download references and clean music through DSH only as acquisition helpers, analyze all reference video/audio/cut/motion patterns, synthesize multi-reference combat grammar, select production combat source by data + combat continuity, identify and download the clean song master from the strongest ranked reference, render with localized beat/impact synchronization and chronology-preserving fight readability, run reference-vs-output QA, and publish the final MP4 artifact. Do not use synthetic/original replacement audio, do not make a slideshow, do not mechanically cut every beat, and do not dispatch additional runs.
-Execution nonce: rerun-after-artifact-fix-2026-08-22T17:12:00+07:00
+Execution nonce: rerun-after-qa-speed-fix-2026-08-22T17:20:00+07:00
