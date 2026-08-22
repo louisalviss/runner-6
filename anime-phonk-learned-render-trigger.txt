@@ -1,3 +1,3 @@
-2026-08-22T22:52:00+07:00
-Run one end-to-end anime combat phonk production using Kordhell - Murder In My Mind as the clean music master. DSH handles acquisition only. Runner-6 must perform fresh audio beat/onset analysis, rebuild the impact mapping and pacing for this track, preserve fight chronology/readability, render ~20s vertical 1080x1920, run QA, and upload the final MP4 artifact. Do not reuse Judas beat timestamps or merely swap the audio bed.
-Execution nonce: murder-in-my-mind-remap-2026-08-22T22:52:00+07:00
+2026-08-23T00:32:00+07:00
+Run one end-to-end anime combat phonk production using canonical Topic-to-Video Flow v0.8-semantic-combat-editor. Use Kordhell - Murder In My Mind clean master. DSH handles acquisition only. Runner-6 must build a NEW semantic combat timeline from source impacts/cuts, use 5+ semantic stages, 5+ phrase-aware music event syncs, add intentional edit cuts, dynamically reframe for 9:16 mobile readability, preserve chronology at the montage/story level, keep speed warp within quality limits, run renderer creative gate plus workflow technical QA, and upload the final MP4 artifact. Do not merely select one contiguous 20s source window and do not reuse prior timing.
+Execution nonce: semantic-combat-v08-2026-08-23T00:32:00+07:00
