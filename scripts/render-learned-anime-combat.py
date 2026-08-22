@@ -252,7 +252,7 @@ def main():
 
     music_start=m['music_start_sec']
     filt=(f'[1:a]atrim=start={music_start:.6f}:duration={TARGET:.3f},asetpts=PTS-STARTPTS,aresample=48000,'
-          f'afade=t=in:st=0:d=.03,afade=t=out:st={TARGET-.05:.3f}:d=.05,loudnorm=I=-14:TP=-1.5:LRA=7[a]')
+          f'afade=t=in:st=0:d=0.03,afade=t=out:st={TARGET-0.05:.3f}:d=0.05,loudnorm=I=-14:TP=-1.5:LRA=7[a]')
     cmd=['ffmpeg','-nostdin','-hide_banner','-y','-i',str(silent),'-i',str(music),'-filter_complex',filt,'-map','0:v:0','-map','[a]','-c:v','libx264','-preset','medium','-crf','18','-pix_fmt','yuv420p','-r',str(FPS),'-c:a','aac','-profile:a','aac_low','-ar','48000','-ac','2','-b:a','192k','-movflags','+faststart','-t',f'{TARGET:.3f}',str(out)]
     subprocess.run(cmd,check=True)
 
