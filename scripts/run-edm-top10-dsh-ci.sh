@@ -42,8 +42,6 @@ for x in p['tracks']:
 print('selection schema pass')
 PY
 
-# Rank 1 first because it was the only acquisition that failed in the previous run.
-# Once Levels passes, acquire the remaining nine ranks normally.
 for RANK in 1 10 9 8 7 6 5 4 3 2; do
   URL="$(python - "$RANK" <<'PY'
 import json,sys
@@ -75,7 +73,7 @@ PY
 done
 
 cleanup_vpngate
-python scripts/render-edm-top10-dsh.py "$ROOT"
+python scripts/render-edm-top10-dsh-v2.py "$ROOT"
 FINAL_MP4="$FINAL/edm_top10_nostalgia.mp4"
 test -s "$FINAL_MP4"
 ffmpeg -nostdin -v error -i "$FINAL_MP4" -f null -
@@ -88,16 +86,17 @@ sel=json.load(open(root/'dsh-selection.json'))
 qa=json.load(open(root/'final/qa.json'))
 tl=json.load(open(root/'final/timeline.json'))
 manifest={
-  'flow':'AI Video Motion-First v0.10 DHS/DSH media handoff',
+  'flow':'AI Video Motion-First v0.10 DHS/DSH media handoff — EDM v2',
   'delegation':{
     'dsh':'research/select/acquire media source identities; downloader materializes handoff assets',
-    'orchestrator':'all editing, crop/reframe, typography, timing, audio sync/mix, render, QC, final MP4'
+    'orchestrator':'inspect audio, choose best cut windows, uncropped crop/reframe strategy, typography, timing, audio mix, render, QC, final MP4'
   },
   'source_policy':'no official-source priority; selected by content fit, visual/audio strength, quality and usability',
+  'production_changes':['longer 73-74s runtime','automatic best-section audio scan','100% foreground footage retained','blurred-fill background only','two-column phone-readable ranking'],
   'selection':sel,
   'timeline':tl,
   'technical_qa':qa,
 }
 (root/'final/SOURCE_MANIFEST.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
-print('EDM TOP10 DSH HANDOFF + FINAL QA PASS')
+print('EDM TOP10 V2 DSH HANDOFF + FINAL QA PASS')
 PY
