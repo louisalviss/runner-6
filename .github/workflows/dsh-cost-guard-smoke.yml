@@ -1,0 +1,51 @@
+name: DSH Cost Guard Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dsh-cost-guard-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Runtime paths
+        run: echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: false
+      - name: Activate runtime and install guard
+        run: bash scripts/activate-dsh-runtime.sh
+      - name: Verify composed config
+        run: |
+          set -euo pipefail
+          test -s "$DSH_HOME/cordis.patch.yml"
+          grep -F 'thresholdRatio: 0.06' "$DSH_HOME/cordis.patch.yml"
+          grep -F 'retainTokens: 12000' "$DSH_HOME/cordis.patch.yml"
+          "$DSH_BIN" --profile headless --dump-config > "$RUNNER_TEMP/dsh-config.txt"
+          python - <<'PY'
+          from pathlib import Path
+          s=Path(__import__('os').environ['RUNNER_TEMP']+'/dsh-config.txt').read_text(errors='replace')
+          pos=s.find('id: compaction-basic')
+          assert pos >= 0, 'compaction-basic missing from composed config'
+          block=s[pos:pos+1200]
+          assert 'thresholdRatio: 0.06' in block, block
+          assert 'retainTokens: 12000' in block, block
+          assert 'maxTokens: 4096' in block, block
+          print(block)
+          PY
