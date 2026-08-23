@@ -38,7 +38,7 @@ PY
   ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" >/dev/null
   ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" >/dev/null
   printf -v OUT '%s/rank-%02d.mp4' "$MEDIA" "$RANK"
-  ffmpeg -nostdin -hide_banner -y -v error -i "$SRC" -map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 19 -vf 'scale=-2:min(720,ih)' -c:a aac -b:a 192k -ar 48000 -ac 2 -movflags +faststart "$OUT"
+  ffmpeg -nostdin -hide_banner -y -v error -i "$SRC" -map 0:v:0 -map 0:a:0 -c:v libx264 -preset veryfast -crf 19 -vf 'scale=-2:720' -c:a aac -b:a 192k -ar 48000 -ac 2 -movflags +faststart "$OUT"
   test -s "$OUT"
   D="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT")"
   python - "$RANK" "$D" <<'PY'
