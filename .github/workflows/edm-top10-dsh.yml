@@ -11,6 +11,10 @@ on:
       - '.github/workflows/edm-top10-dsh.yml'
   workflow_dispatch:
 
+concurrency:
+  group: edm-top10-dsh-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   actions: read
@@ -76,6 +80,7 @@ jobs:
           PY
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: edm-top10-dsh-${{ github.run_id }}
           path: |
@@ -86,4 +91,4 @@ jobs:
             dsh-handoff/edm-top10-dsh/final/timeline.json
             dsh-handoff/edm-top10-dsh/final/SOURCE_MANIFEST.json
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn
