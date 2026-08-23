@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "24"
       - name: Queue audio
-        run: bash scripts/dsh-request-audio.sh 'https://www.youtube.com/watch?v=_cMxraX_5RE' 'Blender open movie audio smoke'
+        run: bash scripts/dsh-request-audio.sh 'https://pixabay.com/music/corporate-ambient-technology-153473/' 'ProxyGrid light ambient technology background by PaulYudin'
       - name: Execute queued audio
         id: audio
         run: |
