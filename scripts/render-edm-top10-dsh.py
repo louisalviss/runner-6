@@ -116,7 +116,7 @@ def main():
     concat=work/'concat.txt'; concat.write_text('\n'.join("file '"+str(p.resolve())+"'" for p in outputs)+'\n')
     joined=work/'joined.mp4'; run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',str(concat),'-c','copy',str(joined)])
     final=out/'edm_top10_nostalgia.mp4'
-    run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-y','-i',str(joined),'-map','0:v:0','-map','0:a:0','-c:v','copy','-af','loudnorm=I=-14:TP=-1.5:LRA=11','-c:a','aac','-b:a','192k','-movflags','+faststart',str(final)])
+    run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-y','-i',str(joined),'-map','0:v:0','-map','0:a:0','-c:v','copy','-af','loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-movflags','+faststart',str(final)])
     D=probe_duration(final); assert 59.0<=D<=60.0,D
 
     times=[.8,3.5,8.6,13.7,18.8,23.9,29,34.1,39.2,44.3,49.4,55.4,58.7]; thumbs=[]
@@ -127,10 +127,11 @@ def main():
     sheet.save(out/'qa-contact.jpg',quality=94)
 
     raw=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(final)],text=True)); v=next(s for s in raw['streams'] if s['codec_type']=='video'); a=next(s for s in raw['streams'] if s['codec_type']=='audio')
-    qa={'pass':True,'duration':D,'resolution':[int(v['width']),int(v['height'])],'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'sample_rate':int(a['sample_rate']),'tracks':10}
-    assert qa['resolution']==[1080,1920] and qa['video_codec']=='h264' and qa['sample_rate']==48000
+    qa={'duration':D,'resolution':[int(v['width']),int(v['height'])],'video_codec':v['codec_name'],'audio_codec':a['codec_name'],'sample_rate':int(a['sample_rate']),'tracks':10}
+    qa['pass']=(qa['resolution']==[1080,1920] and qa['video_codec']=='h264' and qa['audio_codec']=='aac' and qa['sample_rate']==48000 and 59.0<=D<=60.0)
     (out/'qa.json').write_text(json.dumps(qa,indent=2),encoding='utf-8')
     (out/'timeline.json').write_text(json.dumps({'duration':D,'timeline':timeline},ensure_ascii=False,indent=2),encoding='utf-8')
-    print(json.dumps(qa,indent=2))
+    print(json.dumps(qa,indent=2),flush=True)
+    assert qa['pass'],qa
 
 if __name__=='__main__': main()
