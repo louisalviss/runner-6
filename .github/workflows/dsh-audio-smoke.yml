@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: "24"
       - name: Queue audio
-        run: bash scripts/dsh-request-audio.sh 'https://pixabay.com/music/corporate-ambient-technology-153473/' 'ProxyGrid light ambient technology background by PaulYudin'
+        run: bash scripts/dsh-request-audio.sh 'https://www.youtube.com/watch?v=9luV-s_Dk1w' 'Information Flow by Aylex - light ambient technology background'
       - name: Execute queued audio
         id: audio
         run: |
