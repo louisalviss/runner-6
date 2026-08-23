@@ -1,0 +1,2 @@
+trigger=2026-08-24T05:25:00+07:00
+visuals=keep-current
