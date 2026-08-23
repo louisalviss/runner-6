@@ -4,111 +4,166 @@ on:
   push:
     paths:
       - 'proxygrid-audio-final-trigger.txt'
+  pull_request:
+    paths:
+      - 'proxygrid-audio-pr-trigger.txt'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install tools
+      - name: Install audio tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg jq
-          pip install requests
+          pip install edge-tts requests
 
-      - name: Generate Vietnamese neural voice
+      - name: Generate scene-timed NamMinh Neural voice
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p out
-          cat > out/script.txt <<'TXT'
-          Checkpoint, lỗi phiên, tài khoản bị hạn chế? Đừng chỉ nhìn vào tool. IP tái sử dụng, trust thấp hoặc sai vị trí có thể làm workflow mất ổn định. Với ProxyGrid, bạn chọn quốc gia, khu vực, loại phiên và quản lý mọi kết nối trên một dashboard. Chọn geo, thiết lập phiên, kết nối. Trạng thái sẵn sàng chỉ trong vài giây. Hạ tầng ổn định giúp scale dễ hơn, đổi geo linh hoạt hơn và giảm thời gian xử lý lỗi. Truy cập proxygrid.io và bắt đầu ngay.
-          TXT
+          mkdir -p out/chunks
+          cat > out/script.json <<'JSON'
+          [
+            {"start":0.0,"end":4.0,"text":"Checkpoint, lỗi phiên, tài khoản bị hạn chế? Đừng vội đổ lỗi cho công cụ."},
+            {"start":4.0,"end":8.0,"text":"IP tái sử dụng, độ tin cậy thấp hay sai vị trí đều có thể làm phiên kém ổn định."},
+            {"start":8.0,"end":14.0,"text":"Với Proxy Grid, bạn chọn quốc gia, khu vực, loại phiên và quản lý mọi kết nối ngay trên một bảng điều khiển."},
+            {"start":14.0,"end":20.0,"text":"Chọn vị trí, thiết lập phiên rồi kết nối. Mọi thứ sẵn sàng chỉ trong vài giây."},
+            {"start":20.0,"end":25.0,"text":"Hạ tầng ổn định hơn, mở rộng dễ hơn, đổi khu vực linh hoạt và giảm thời gian xử lý lỗi."},
+            {"start":25.0,"end":30.0,"text":"Muốn vận hành gọn hơn? Truy cập Proxy Grid chấm ai ô, và bắt đầu ngay."}
+          ]
+          JSON
           python - <<'PY'
-          import requests, pathlib
-          text=pathlib.Path('out/script.txt').read_text().strip()
-          r=requests.post('https://freetts.org/api/tts',json={
-              'text':text,
-              'voice':'vi-VN-NamMinhNeural',
-              'rate':'+4%',
-              'pitch':'-2Hz',
-              'output_format':'mp3-hd'
-          },timeout=90)
-          r.raise_for_status()
-          j=r.json(); print(j)
-          fid=j['file_id']
-          a=requests.get(f'https://freetts.org/api/audio/{fid}',timeout=90)
-          a.raise_for_status()
-          pathlib.Path('out/voice.mp3').write_bytes(a.content)
-          PY
-          ffmpeg -y -v error -i out/voice.mp3 -af "highpass=f=70,lowpass=f=12500,loudnorm=I=-16:TP=-1.5:LRA=7" -ar 48000 -ac 1 out/voice.wav
+          import asyncio, json, subprocess
+          import edge_tts
 
-      - name: Download light ambient-tech music
+          scenes=json.load(open('out/script.json',encoding='utf-8'))
+
+          async def synth():
+              for i,s in enumerate(scenes):
+                  raw=f'out/chunks/raw_{i}.mp3'
+                  c=edge_tts.Communicate(
+                      s['text'],
+                      voice='vi-VN-NamMinhNeural',
+                      rate='-2%',
+                      pitch='-1Hz',
+                      volume='+0%'
+                  )
+                  await c.save(raw)
+          asyncio.run(synth())
+
+          for i,s in enumerate(scenes):
+              raw=f'out/chunks/raw_{i}.mp3'
+              dur=float(subprocess.check_output([
+                  'ffprobe','-v','error','-show_entries','format=duration',
+                  '-of','default=nk=1:nw=1',raw
+              ]).decode().strip())
+              target=(s['end']-s['start'])-0.45
+              if dur > target:
+                  speed=dur/target
+                  xs=[]
+                  while speed>2:
+                      xs.append(2.0); speed/=2
+                  xs.append(speed)
+                  tempo=','.join(f'atempo={x:.6f}' for x in xs)
+              else:
+                  tempo='anull'
+              subprocess.run([
+                  'ffmpeg','-y','-v','error','-i',raw,
+                  '-af',f'{tempo},highpass=f=75,lowpass=f=12500,acompressor=threshold=-18dB:ratio=2.2:attack=12:release=130,loudnorm=I=-16:TP=-1.5:LRA=7',
+                  '-ar','48000','-ac','1',f'out/chunks/fit_{i}.wav'
+              ],check=True)
+          PY
+
+          ffmpeg -y -v error \
+            -i out/chunks/fit_0.wav -i out/chunks/fit_1.wav -i out/chunks/fit_2.wav \
+            -i out/chunks/fit_3.wav -i out/chunks/fit_4.wav -i out/chunks/fit_5.wav \
+            -filter_complex "[0:a]adelay=180[a0];[1:a]adelay=4180[a1];[2:a]adelay=8180[a2];[3:a]adelay=14180[a3];[4:a]adelay=20180[a4];[5:a]adelay=25180[a5];[a0][a1][a2][a3][a4][a5]amix=inputs=6:duration=longest:normalize=0,apad=pad_dur=30,atrim=0:30[a]" \
+            -map "[a]" -ar 48000 -ac 1 out/voice.wav
+
+      - name: Ask DSH to download light ambient-tech music
+        id: dsh_music
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          bash scripts/dsh-request-audio.sh \
+            'https://pixabay.com/music/corporate-ambient-technology-153473/' \
+            'Ambient Technology by PaulYudin - ProxyGrid background'
+          URL="$(python - <<'PY'
+          import json
+          print(json.load(open('.dsh-download-request.json'))['url'])
+          PY
+          )"
+          bash scripts/dsh-download-media.sh "$URL" 720
+          SRC="$(python - <<'PY'
+          import json
+          print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])
+          PY
+          )"
+          cp "$SRC" out/music-source
+          printf '%s\n' 'https://pixabay.com/music/corporate-ambient-technology-153473/' > out/music-source.txt
+
+      - name: Direct licensed-track fallback if DSH extractor cannot resolve page
+        if: steps.dsh_music.outcome != 'success'
         shell: bash
         continue-on-error: true
         run: |
           python - <<'PY'
           import requests,re,html,pathlib,sys
-          pages=[
-            'https://pixabay.com/music/corporate-ambient-technology-153473/',
-            'https://pixabay.com/music/corporate-ambient-technology-136051/'
-          ]
+          page='https://pixabay.com/music/corporate-ambient-technology-153473/'
           h={'User-Agent':'Mozilla/5.0'}
-          for page in pages:
-              txt=requests.get(page,headers=h,timeout=30).text
-              hits=re.findall(r'https://cdn\.pixabay\.com/[^\"<> ]+?\.mp3[^\"<> ]*',txt)
-              if hits:
-                  u=html.unescape(hits[0].replace('\\u0026','&'))
-                  a=requests.get(u,headers=h,timeout=90)
-                  if a.ok and len(a.content)>100000:
-                      pathlib.Path('out/music-source.mp3').write_bytes(a.content)
-                      pathlib.Path('out/music-source.txt').write_text(u+'\n')
-                      sys.exit(0)
+          txt=requests.get(page,headers=h,timeout=40).text
+          hits=re.findall(r'https://cdn\.pixabay\.com/[^\"<> ]+?\.mp3[^\"<> ]*',txt)
+          for hit in hits:
+              u=html.unescape(hit.replace('\\u0026','&'))
+              r=requests.get(u,headers=h,timeout=90)
+              if r.ok and len(r.content)>100000:
+                  pathlib.Path('out/music-source').write_bytes(r.content)
+                  pathlib.Path('out/music-source.txt').write_text(page+'\n')
+                  sys.exit(0)
           sys.exit(4)
           PY
 
-      - name: Fit voice and mix soundtrack
+      - name: Prepare subtle background and final mix
         shell: bash
         run: |
           set -euo pipefail
-          DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 out/voice.wav)
-          python - "$DUR" <<'PY' > /tmp/tempo.txt
-          import sys
-          d=float(sys.argv[1]); target=28.7
-          speed=max(1.0,d/target)
-          xs=[]
-          while speed>2: xs.append(2.0); speed/=2
-          xs.append(speed)
-          print(','.join(f'atempo={x:.6f}' for x in xs) if d>target else 'anull')
-          PY
-          TEMPO=$(cat /tmp/tempo.txt)
-          ffmpeg -y -v error -i out/voice.wav -af "$TEMPO,apad=pad_dur=30,atrim=0:30" -ar 48000 -ac 1 out/voice-fit.wav
-          if [ -s out/music-source.mp3 ]; then
-            ffmpeg -y -v error -stream_loop -1 -i out/music-source.mp3 -t 30 -af "highpass=f=90,lowpass=f=10000,volume=0.11,afade=t=in:st=0:d=1.2,afade=t=out:st=27.5:d=2.5" -ar 48000 -ac 2 out/music.wav
+          if [ -s out/music-source ]; then
+            ffmpeg -y -v error -stream_loop -1 -i out/music-source -t 30 \
+              -af "highpass=f=90,lowpass=f=10000,volume=0.10,afade=t=in:st=0:d=1.4,afade=t=out:st=27.5:d=2.5" \
+              -ar 48000 -ac 2 out/music.wav
           else
-            ffmpeg -y -v error -f lavfi -i "anoisesrc=color=pink:amplitude=0.012:duration=30:sample_rate=48000" -f lavfi -i "sine=frequency=110:duration=30:sample_rate=48000" -filter_complex "[0:a]lowpass=f=1600,volume=0.04[n];[1:a]volume=0.015[s];[n][s]amix=2,afade=t=in:st=0:d=2,afade=t=out:st=27:d=3,pan=stereo|c0=c0|c1=c0[m]" -map "[m]" out/music.wav
-            echo synthesized-fallback > out/music-source.txt
+            ffmpeg -y -v error \
+              -f lavfi -i "anoisesrc=color=pink:amplitude=0.010:duration=30:sample_rate=48000" \
+              -f lavfi -i "sine=frequency=110:duration=30:sample_rate=48000" \
+              -filter_complex "[0:a]lowpass=f=1500,volume=0.035[n];[1:a]volume=0.010[s];[n][s]amix=2,afade=t=in:st=0:d=2,afade=t=out:st=27:d=3,pan=stereo|c0=c0|c1=c0[m]" \
+              -map "[m]" out/music.wav
+            printf '%s\n' 'synthesized-fallback' > out/music-source.txt
           fi
-          ffmpeg -y -v error -i out/voice-fit.wav -i out/music.wav -filter_complex "[0:a]volume=1[v];[1:a][v]sidechaincompress=threshold=0.02:ratio=9:attack=15:release=320[duck];[v][duck]amix=inputs=2:weights='1 0.32':normalize=0,loudnorm=I=-14:TP=-1.2:LRA=7[a]" -map "[a]" -t 30 -ar 48000 -ac 2 out/final-audio.wav
 
-      - name: Publish audio
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p generated/proxygrid-audio-final
-          cp out/final-audio.wav generated/proxygrid-audio-final/final-audio.wav
-          cp out/voice-fit.wav generated/proxygrid-audio-final/voice.wav
-          cp out/music-source.txt generated/proxygrid-audio-final/music-source.txt
-          cp out/script.txt generated/proxygrid-audio-final/script.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add generated/proxygrid-audio-final
-          git commit -m 'Publish ProxyGrid final soundtrack [skip ci]'
-          git pull --rebase origin main
-          git push origin HEAD:main
+          ffmpeg -y -v error -i out/voice.wav -i out/music.wav \
+            -filter_complex "[0:a]volume=1.0[v];[1:a][v]sidechaincompress=threshold=0.018:ratio=10:attack=12:release=320[duck];[v][duck]amix=inputs=2:weights='1 0.34':normalize=0,loudnorm=I=-14:TP=-1.2:LRA=7[a]" \
+            -map "[a]" -t 30 -ar 48000 -ac 2 out/final-audio.wav
+
+          ffprobe -v error -show_format -show_streams -of json out/final-audio.wav > out/ffprobe.json
+
+      - name: Upload final soundtrack package
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxygrid-final-audio-${{ github.run_id }}
+          path: |
+            out/final-audio.wav
+            out/voice.wav
+            out/music.wav
+            out/music-source.txt
+            out/script.json
+            out/ffprobe.json
+          retention-days: 3
+          compression-level: 0
