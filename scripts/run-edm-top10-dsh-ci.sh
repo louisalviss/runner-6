@@ -7,6 +7,27 @@ FINAL="$ROOT/final"
 mkdir -p "$MEDIA" "$FINAL"
 test -s "$SEL"
 
+cleanup_vpngate() {
+  local iface
+  iface="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+  sudo ip netns exec dshvpn pkill openvpn >/dev/null 2>&1 || true
+  sudo ip netns del dshvpn >/dev/null 2>&1 || true
+  sudo ip link del dshvh >/dev/null 2>&1 || true
+  sudo rm -rf /etc/netns/dshvpn >/dev/null 2>&1 || true
+  if [ -n "$iface" ]; then
+    while sudo iptables -t nat -C POSTROUTING -s 10.237.0.0/24 -o "$iface" -j MASQUERADE >/dev/null 2>&1; do
+      sudo iptables -t nat -D POSTROUTING -s 10.237.0.0/24 -o "$iface" -j MASQUERADE >/dev/null 2>&1 || break
+    done
+    while sudo iptables -C FORWARD -i dshvh -o "$iface" -j ACCEPT >/dev/null 2>&1; do
+      sudo iptables -D FORWARD -i dshvh -o "$iface" -j ACCEPT >/dev/null 2>&1 || break
+    done
+    while sudo iptables -C FORWARD -i "$iface" -o dshvh -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1; do
+      sudo iptables -D FORWARD -i "$iface" -o dshvh -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || break
+    done
+  fi
+}
+trap cleanup_vpngate EXIT
+
 python - <<'PY'
 import json
 p=json.load(open('dsh-handoff/edm-top10-dsh/dsh-selection.json'))
@@ -21,7 +42,9 @@ for x in p['tracks']:
 print('selection schema pass')
 PY
 
-for RANK in $(seq 10 -1 1); do
+# Rank 1 first because it was the only acquisition that failed in the previous run.
+# Once Levels passes, acquire the remaining nine ranks normally.
+for RANK in 1 10 9 8 7 6 5 4 3 2; do
   URL="$(python - "$RANK" <<'PY'
 import json,sys
 rank=int(sys.argv[1]); p=json.load(open('dsh-handoff/edm-top10-dsh/dsh-selection.json'))
@@ -30,9 +53,11 @@ print(row['selected_source']['url'])
 PY
 )"
   echo "=== DSH handoff acquisition rank $RANK ==="
+  cleanup_vpngate
   rm -rf dsh-handoff/downloads dsh-handoff/handoff.json
   mkdir -p dsh-handoff/downloads
   bash scripts/dsh-download-media.sh "$URL" 720
+  cleanup_vpngate
   SRC="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
   test -s "$SRC"
   ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$SRC" >/dev/null
@@ -49,6 +74,7 @@ print('rank',rank,'duration',round(d,2),'sec')
 PY
 done
 
+cleanup_vpngate
 python scripts/render-edm-top10-dsh.py "$ROOT"
 FINAL_MP4="$FINAL/edm_top10_nostalgia.mp4"
 test -s "$FINAL_MP4"
