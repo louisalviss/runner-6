@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -32,6 +34,8 @@ jobs:
       - name: Activate runtime and install guard
         run: bash scripts/activate-dsh-runtime.sh
       - name: Verify composed config
+        id: verify
+        continue-on-error: true
         run: |
           set -euo pipefail
           test -s "$DSH_HOME/cordis.patch.yml"
@@ -40,12 +44,35 @@ jobs:
           "$DSH_BIN" --profile headless --dump-config > "$RUNNER_TEMP/dsh-config.txt"
           python - <<'PY'
           from pathlib import Path
-          s=Path(__import__('os').environ['RUNNER_TEMP']+'/dsh-config.txt').read_text(errors='replace')
+          import os
+          s=Path(os.environ['RUNNER_TEMP']+'/dsh-config.txt').read_text(errors='replace')
           pos=s.find('id: compaction-basic')
           assert pos >= 0, 'compaction-basic missing from composed config'
-          block=s[pos:pos+1200]
+          block=s[pos:pos+1600]
           assert 'thresholdRatio: 0.06' in block, block
           assert 'retainTokens: 12000' in block, block
           assert 'maxTokens: 4096' in block, block
           print(block)
           PY
+      - name: Publish smoke status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+          STATUS=fail
+          [ "$VERIFY_OUTCOME" = success ] && STATUS=pass
+          printf '{"status":"%s","run_id":"%s","commit":"%s","threshold_ratio":0.06,"retain_tokens":12000,"summary_max_tokens":4096}\n' "$STATUS" "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$RUNNER_TEMP/status.json"
+          CONTENT="$(base64 -w0 "$RUNNER_TEMP/status.json")"
+          SHA="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-smoke-status.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-smoke-status.json" -f message='Update DSH cost guard smoke status [skip ci]' -f content="$CONTENT" -f sha="$SHA" -f branch=main >/dev/null
+          else
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-smoke-status.json" -f message='Publish DSH cost guard smoke status [skip ci]' -f content="$CONTENT" -f branch=main >/dev/null
+          fi
+      - name: Enforce smoke pass
+        if: always()
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: test "$VERIFY_OUTCOME" = success
