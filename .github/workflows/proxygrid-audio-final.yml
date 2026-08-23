@@ -1,0 +1,114 @@
+name: ProxyGrid Audio Final
+
+on:
+  push:
+    paths:
+      - 'proxygrid-audio-final-trigger.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg jq
+          pip install requests
+
+      - name: Generate Vietnamese neural voice
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cat > out/script.txt <<'TXT'
+          Checkpoint, lỗi phiên, tài khoản bị hạn chế? Đừng chỉ nhìn vào tool. IP tái sử dụng, trust thấp hoặc sai vị trí có thể làm workflow mất ổn định. Với ProxyGrid, bạn chọn quốc gia, khu vực, loại phiên và quản lý mọi kết nối trên một dashboard. Chọn geo, thiết lập phiên, kết nối. Trạng thái sẵn sàng chỉ trong vài giây. Hạ tầng ổn định giúp scale dễ hơn, đổi geo linh hoạt hơn và giảm thời gian xử lý lỗi. Truy cập proxygrid.io và bắt đầu ngay.
+          TXT
+          python - <<'PY'
+          import requests, pathlib
+          text=pathlib.Path('out/script.txt').read_text().strip()
+          r=requests.post('https://freetts.org/api/tts',json={
+              'text':text,
+              'voice':'vi-VN-NamMinhNeural',
+              'rate':'+4%',
+              'pitch':'-2Hz',
+              'output_format':'mp3-hd'
+          },timeout=90)
+          r.raise_for_status()
+          j=r.json(); print(j)
+          fid=j['file_id']
+          a=requests.get(f'https://freetts.org/api/audio/{fid}',timeout=90)
+          a.raise_for_status()
+          pathlib.Path('out/voice.mp3').write_bytes(a.content)
+          PY
+          ffmpeg -y -v error -i out/voice.mp3 -af "highpass=f=70,lowpass=f=12500,loudnorm=I=-16:TP=-1.5:LRA=7" -ar 48000 -ac 1 out/voice.wav
+
+      - name: Download light ambient-tech music
+        shell: bash
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import requests,re,html,pathlib,sys
+          pages=[
+            'https://pixabay.com/music/corporate-ambient-technology-153473/',
+            'https://pixabay.com/music/corporate-ambient-technology-136051/'
+          ]
+          h={'User-Agent':'Mozilla/5.0'}
+          for page in pages:
+              txt=requests.get(page,headers=h,timeout=30).text
+              hits=re.findall(r'https://cdn\.pixabay\.com/[^\"<> ]+?\.mp3[^\"<> ]*',txt)
+              if hits:
+                  u=html.unescape(hits[0].replace('\\u0026','&'))
+                  a=requests.get(u,headers=h,timeout=90)
+                  if a.ok and len(a.content)>100000:
+                      pathlib.Path('out/music-source.mp3').write_bytes(a.content)
+                      pathlib.Path('out/music-source.txt').write_text(u+'\n')
+                      sys.exit(0)
+          sys.exit(4)
+          PY
+
+      - name: Fit voice and mix soundtrack
+        shell: bash
+        run: |
+          set -euo pipefail
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 out/voice.wav)
+          python - "$DUR" <<'PY' > /tmp/tempo.txt
+          import sys
+          d=float(sys.argv[1]); target=28.7
+          speed=max(1.0,d/target)
+          xs=[]
+          while speed>2: xs.append(2.0); speed/=2
+          xs.append(speed)
+          print(','.join(f'atempo={x:.6f}' for x in xs) if d>target else 'anull')
+          PY
+          TEMPO=$(cat /tmp/tempo.txt)
+          ffmpeg -y -v error -i out/voice.wav -af "$TEMPO,apad=pad_dur=30,atrim=0:30" -ar 48000 -ac 1 out/voice-fit.wav
+          if [ -s out/music-source.mp3 ]; then
+            ffmpeg -y -v error -stream_loop -1 -i out/music-source.mp3 -t 30 -af "highpass=f=90,lowpass=f=10000,volume=0.11,afade=t=in:st=0:d=1.2,afade=t=out:st=27.5:d=2.5" -ar 48000 -ac 2 out/music.wav
+          else
+            ffmpeg -y -v error -f lavfi -i "anoisesrc=color=pink:amplitude=0.012:duration=30:sample_rate=48000" -f lavfi -i "sine=frequency=110:duration=30:sample_rate=48000" -filter_complex "[0:a]lowpass=f=1600,volume=0.04[n];[1:a]volume=0.015[s];[n][s]amix=2,afade=t=in:st=0:d=2,afade=t=out:st=27:d=3,pan=stereo|c0=c0|c1=c0[m]" -map "[m]" out/music.wav
+            echo synthesized-fallback > out/music-source.txt
+          fi
+          ffmpeg -y -v error -i out/voice-fit.wav -i out/music.wav -filter_complex "[0:a]volume=1[v];[1:a][v]sidechaincompress=threshold=0.02:ratio=9:attack=15:release=320[duck];[v][duck]amix=inputs=2:weights='1 0.32':normalize=0,loudnorm=I=-14:TP=-1.2:LRA=7[a]" -map "[a]" -t 30 -ar 48000 -ac 2 out/final-audio.wav
+
+      - name: Publish audio
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p generated/proxygrid-audio-final
+          cp out/final-audio.wav generated/proxygrid-audio-final/final-audio.wav
+          cp out/voice-fit.wav generated/proxygrid-audio-final/voice.wav
+          cp out/music-source.txt generated/proxygrid-audio-final/music-source.txt
+          cp out/script.txt generated/proxygrid-audio-final/script.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add generated/proxygrid-audio-final
+          git commit -m 'Publish ProxyGrid final soundtrack [skip ci]'
+          git pull --rebase origin main
+          git push origin HEAD:main
