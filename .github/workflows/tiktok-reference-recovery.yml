@@ -7,6 +7,7 @@ on:
       - 'tiktok-reference-trigger.txt'
       - '.github/workflows/tiktok-reference-recovery.yml'
       - 'scripts/dsh-download-media.sh'
+      - 'scripts/dsh-ytdlp-vpngate.sh'
       - 'scripts/setup-cloudflare-warp.sh'
       - 'scripts/setup-dsh-media-tools.sh'
 
@@ -16,7 +17,7 @@ permissions:
 jobs:
   recover:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install media tools
@@ -26,14 +27,50 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg curl jq
           bash scripts/setup-dsh-media-tools.sh
-      - name: Recover TikTok reference by raw ID with TikWM + WARP fallback
+      - name: Recover TikTok reference through geo relay pool
         shell: bash
         run: |
           set -euo pipefail
           rm -rf dsh-handoff
           mkdir -p dsh-handoff/downloads
+          SRC=''
+
+          # First use the validated TikWM + WARP lane.
+          set +e
           bash scripts/dsh-download-media.sh 'https://www.tikwm.com/video/7674932885383662849' 1080
-          SRC="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ] && [ -s dsh-handoff/handoff.json ]; then
+            SRC="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          fi
+
+          # If US/WARP cannot resolve it, use bounded VPNGate relays (JP/KR/SG/US/CA priority).
+          if [ -z "$SRC" ] || [ ! -s "$SRC" ]; then
+            rm -f dsh-handoff/handoff.json
+            set +e
+            SRC="$(YTDLP_BIN="$HOME/.local/bin/yt-dlp" DSH_MEDIA_MODE=video bash scripts/dsh-ytdlp-vpngate.sh 'https://www.tiktok.com/@x/video/7674932885383662849' 1080)"
+            VCODE=$?
+            set -e
+            if [ "$VCODE" -ne 0 ] || [ -z "$SRC" ] || [ ! -s "$SRC" ]; then
+              echo 'TikTok reference remained unavailable across direct, WARP, and VPNGate geo relays.' >&2
+              exit 2
+            fi
+            cp "$SRC" dsh-handoff/reference.mp4
+            SRC='dsh-handoff/reference.mp4'
+            python - <<'PY'
+import json
+from pathlib import Path
+p=Path('dsh-handoff/reference.mp4')
+Path('dsh-handoff/handoff.json').write_text(json.dumps({
+  'source_url':'https://www.tiktok.com/@x/video/7674932885383662849',
+  'relative_path':str(p),
+  'bytes':p.stat().st_size,
+  'media_type':'video',
+  'recovery':'vpngate-geo-pool'
+},indent=2),encoding='utf-8')
+PY
+          fi
+
           test -s "$SRC"
           ffprobe -v error -show_entries format=duration,size,bit_rate -show_entries stream=codec_type,codec_name,width,height -of json "$SRC" > dsh-handoff/reference-ffprobe.json
           ffmpeg -nostdin -hide_banner -y -v error -i "$SRC" -vf 'fps=1/3,scale=360:-2,tile=5x4:padding=4:margin=4' -frames:v 1 dsh-handoff/reference-contact.jpg || true
