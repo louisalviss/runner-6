@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "mode": "RECREATE+",
+  "reference": {
+    "source": "user screen recording",
+    "creative_start_sec": 0.8,
+    "creative_end_sec": 15.7,
+    "exclude": [
+      {"range": [0, 0.8], "reason": "previous TikTok feed item, not ad creative"},
+      {"range": [15.7, 16.8], "reason": "native TikTok advertiser modal, not creative"}
+    ],
+    "canvas": "vertical 9:16",
+    "motion_type": "continuous UI/product motion graphic ad; no hard scene cuts"
+  },
+  "stack": {
+    "acquisition": "DSH/Playwright web research and asset handoff",
+    "compositor": "Remotion + HTML/SVG native UI",
+    "audio": "preserve trimmed reference soundtrack at production handoff",
+    "qc": ["technical", "reference structure", "mobile/iPhone readability", "no destructive crop"]
+  },
+  "beats": [
+    {"t": [0.0, 2.3], "hero": "IBKR logo + mobile TSLA Options phone", "headline": "New to trading options spreads?", "motion": "phone rises/settles; headline soft reveal"},
+    {"t": [2.3, 3.6], "hero": "same phone", "headline": "Get started with confidence", "motion": "headline replacement; phone remains continuous"},
+    {"t": [3.6, 5.3], "hero": "TSLA prediction UI", "motion": "UI emphasis/selection; no cut"},
+    {"t": [5.3, 6.8], "hero": "bullish TSLA card", "motion": "card slides laterally in front of phone"},
+    {"t": [6.8, 8.4], "hero": "percentage prediction card", "motion": "second card slides and replaces/overlaps first"},
+    {"t": [8.4, 10.1], "hero": "Time Horizon card", "motion": "white card lands center; surrounding cards recede"},
+    {"t": [10.1, 12.8], "hero": "options strategy list phone", "headline": "Option strategies simplified", "motion": "phone content transforms from question UI to strategy list"},
+    {"t": [12.8, 14.9], "hero": "brand proof + phone", "headline": "THE BEST INFORMED INVESTORS CHOOSE", "motion": "brand lockup + Open Account CTA, settle/end"}
+  ],
+  "hard_rules": [
+    "native editable typography and UI labels",
+    "phone UI must remain readable at iPhone size",
+    "one continuous motion thought, not slideshow",
+    "do not reproduce TikTok chrome",
+    "do not include native TikTok modal",
+    "do not invent unrelated brand/product assets",
+    "no destructive crop"
+  ]
+}

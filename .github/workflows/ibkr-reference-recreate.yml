@@ -1,0 +1,14 @@
+name: IBKR Reference RECREATE+ v0.11
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'PR execution is routed through the existing DSH workflow slot on this ephemeral branch.'
