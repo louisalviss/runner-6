@@ -18,146 +18,28 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    env:
-      DSH_VERSION: "0.1.0-rc.7"
-      PLAYWRIGHT_MCP_VERSION: "0.0.78"
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Install production tools
+      - name: Install native motion-graphics production tools
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl jq file librsvg2-bin
-          bash scripts/setup-dsh-media-tools.sh
+          sudo apt-get install -y -qq ffmpeg librsvg2-bin
 
-      - name: Configure DSH runtime
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          set -euo pipefail
-          echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/dsh-home"
-          cat > "$RUNNER_TEMP/dsh-home/settings.yaml" <<'YAML'
-          llm-pi-ai:
-            providers:
-              openrouter-v4:
-                displayName: OpenRouter DeepSeek V4 Pro
-                apiKeyEnv: OPENROUTER_API_KEY
-                api: openai-completions
-                baseURL: https://openrouter.ai/api/v1
-                compat:
-                  thinkingFormat: openrouter
-                models:
-                  - id: deepseek/deepseek-v4-pro
-                    name: DeepSeek V4 Pro
-                    contextWindow: 1000000
-                    maxTokens: 8192
-                    input: [text]
-          agent-default-model:
-            provider: openrouter-v4
-            model: deepseek/deepseek-v4-pro
-          YAML
-          chmod 600 "$RUNNER_TEMP/dsh-home/settings.yaml"
-
-      - name: Restore DSH runtime
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cache/runner6-dsh-runtime
-            ~/.npm
-          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
-          fail-on-cache-miss: false
-
-      - name: Activate DSH and browser
-        run: |
-          set -euo pipefail
-          bash scripts/activate-dsh-runtime.sh
-          bash scripts/setup-dsh-playwright.sh .
-
-      - name: DSH checkpoint A — IBKR logo acquisition
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          set -euo pipefail
-          mkdir -p dsh-handoff/ibkr-recreate/raw
-          TASK='You are DHS/DSH, the ACQUISITION LAYER only. This is checkpoint A for a v0.11 RECREATE+ of a 14.9-second Interactive Brokers vertical options ad. Research ONLY a clean authentic Interactive Brokers brand/logo visual asset suitable over a dark navy/teal background. Do not design, animate, edit, or render. Use Playwright/current public web. Find EXACTLY 3 plausible logo candidates, no more. For each verify that page_url works and asset_url is a direct public SVG/PNG/image URL that opens without login. Prioritize authenticity, high resolution/vector quality, transparency or dark-background suitability, and retrievability. No official-first or copyright-safe-first restriction. CRITICAL CHECKPOINT RULE: immediately after the third candidate is verified, BEFORE any more research or explanation, write dsh-handoff/ibkr-recreate/dsh-logo-selection.json. Do not postpone writing the file. JSON must have EXACT top-level keys selected_logo, logo_candidates, rationale. selected_logo must contain source_name,page_url,asset_url,why_selected. logo_candidates must contain exactly 3 objects, each with source_name,page_url,asset_url,notes. Then stop. Finish with DSH_LOGO_READY.'
-          set +e
-          timeout --signal=TERM --kill-after=10s 180s "$DSH_BIN" --profile headless "$TASK"
-          CODE=$?
-          set -e
-          test -s dsh-handoff/ibkr-recreate/dsh-logo-selection.json
-          python3 - <<'PY'
-          import json
-          p=json.load(open('dsh-handoff/ibkr-recreate/dsh-logo-selection.json'))
-          assert set(p)=={'selected_logo','logo_candidates','rationale'}
-          assert len(p['logo_candidates']) == 3
-          assert p['selected_logo']['page_url'].startswith('http')
-          assert p['selected_logo']['asset_url'].startswith('http')
-          print(json.dumps(p,ensure_ascii=False,indent=2))
-          PY
-          if [ "$CODE" != 0 ] && [ "$CODE" != 124 ]; then exit "$CODE"; fi
-
-      - name: DSH checkpoint B — IBKR mobile UI acquisition
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          set -euo pipefail
-          TASK='You are DHS/DSH, the ACQUISITION LAYER only. This is checkpoint B for a v0.11 RECREATE+ of a 14.9-second Interactive Brokers options-spreads vertical ad. Research ONLY high-quality current public visual references for Interactive Brokers mobile/options UI. Do not design, animate, edit, or render. Use Playwright/current public web. Find EXACTLY 3 plausible UI-reference candidates, no more, emphasizing authentic mobile app visual language, options/strategy context, readability, useful resolution and retrievability. For each verify page_url works and asset_url is a direct public image URL that opens without login. No official-first or copyright-safe-first restriction. CRITICAL CHECKPOINT RULE: immediately after the third candidate is verified, BEFORE any more research or explanation, write dsh-handoff/ibkr-recreate/dsh-ui-selection.json. Do not postpone writing the file. JSON must have EXACT top-level keys selected_ui_reference, ui_candidates, rationale. selected_ui_reference must contain source_name,page_url,asset_url,why_selected. ui_candidates must contain exactly 3 objects, each with source_name,page_url,asset_url,notes. Then stop. Finish with DSH_UI_READY.'
-          set +e
-          timeout --signal=TERM --kill-after=10s 180s "$DSH_BIN" --profile headless "$TASK"
-          CODE=$?
-          set -e
-          test -s dsh-handoff/ibkr-recreate/dsh-ui-selection.json
-          python3 - <<'PY'
-          import json
-          p=json.load(open('dsh-handoff/ibkr-recreate/dsh-ui-selection.json'))
-          assert set(p)=={'selected_ui_reference','ui_candidates','rationale'}
-          assert len(p['ui_candidates']) == 3
-          assert p['selected_ui_reference']['page_url'].startswith('http')
-          assert p['selected_ui_reference']['asset_url'].startswith('http')
-          print(json.dumps(p,ensure_ascii=False,indent=2))
-          PY
-          if [ "$CODE" != 0 ] && [ "$CODE" != 124 ]; then exit "$CODE"; fi
-
-      - name: Combine validated DSH acquisition checkpoints
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          root=Path('dsh-handoff/ibkr-recreate')
-          a=json.load(open(root/'dsh-logo-selection.json'))
-          b=json.load(open(root/'dsh-ui-selection.json'))
-          out={
-            'selected_logo':a['selected_logo'],
-            'logo_candidates':a['logo_candidates'],
-            'selected_ui_reference':b['selected_ui_reference'],
-            'ui_candidates':b['ui_candidates'],
-            'rationale':f"Logo: {a['rationale']} UI: {b['rationale']}",
-          }
-          (root/'dsh-selection.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
-          assert len(out['logo_candidates'])==3 and len(out['ui_candidates'])==3
-          print('DSH_COMBINED_SELECTION_READY')
-          PY
-
-      - name: Production assistant compositor render
+      - name: Render routed Remotion/DOM/SVG reconstruction
         run: bash scripts/run-ibkr-recreate-ci.sh
 
-      - name: Upload reconstruction handoff
+      - name: Upload reconstruction candidate
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ibkr-recreate-v011-${{ github.run_id }}
           path: |
-            dsh-handoff/ibkr-recreate/dsh-logo-selection.json
-            dsh-handoff/ibkr-recreate/dsh-ui-selection.json
-            dsh-handoff/ibkr-recreate/dsh-selection.json
-            dsh-handoff/ibkr-recreate/raw/
             dsh-handoff/ibkr-recreate/final/ibkr_recreate_silent.mp4
             dsh-handoff/ibkr-recreate/final/qa-contact.jpg
             dsh-handoff/ibkr-recreate/final/qa.json
