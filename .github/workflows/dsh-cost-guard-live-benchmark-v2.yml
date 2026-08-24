@@ -1,0 +1,174 @@
+name: DSH Cost Guard Live Benchmark V2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dsh-cost-guard-live-trigger.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DSH_HOME: ${{ runner.temp }}/dsh-home
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Read starting OpenRouter usage
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/key-before.json"
+
+      - name: Configure DSH via local metering proxy
+        run: |
+          set -euo pipefail
+          mkdir -p "$DSH_HOME"
+          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          llm-pi-ai:
+            providers:
+              openrouter-v4:
+                displayName: OpenRouter DeepSeek V4 Pro Metered
+                apiKeyEnv: OPENROUTER_API_KEY
+                api: openai-completions
+                baseURL: http://127.0.0.1:18080/api/v1
+                compat:
+                  thinkingFormat: openrouter
+                models:
+                  - id: deepseek/deepseek-v4-pro
+                    name: DeepSeek V4 Pro
+                    contextWindow: 1000000
+                    maxTokens: 8192
+                    input: [text]
+          agent-default-model:
+            provider: openrouter-v4
+            model: deepseek/deepseek-v4-pro
+          YAML
+          chmod 600 "$DSH_HOME/settings.yaml"
+
+      - name: Restore DSH runtime
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/runner6-dsh-runtime
+            ~/.npm
+          key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
+          fail-on-cache-miss: false
+
+      - name: Activate DSH and cost guard
+        run: bash scripts/activate-dsh-runtime.sh
+
+      - name: Start metering proxy
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          cat > "$RUNNER_TEMP/openrouter-meter.mjs" <<'NODE'
+          import http from 'node:http';
+          import fs from 'node:fs';
+          const log=process.env.RUNNER_TEMP+'/meter.jsonl';
+          let seq=0;
+          const append=(x)=>fs.appendFileSync(log,JSON.stringify(x)+'\n');
+          const server=http.createServer(async (req,res)=>{
+            const chunks=[]; for await (const c of req) chunks.push(c);
+            const raw=Buffer.concat(chunks); let body=raw; let obj=null;
+            try { obj=JSON.parse(raw.toString('utf8')); obj.usage={include:true}; body=Buffer.from(JSON.stringify(obj)); } catch {}
+            const n=++seq;
+            const messages=Array.isArray(obj?.messages)?obj.messages:[];
+            const messageChars=messages.reduce((a,m)=>a+JSON.stringify(m).length,0);
+            const roles={}; for(const m of messages) roles[m.role]=(roles[m.role]||0)+JSON.stringify(m).length;
+            const started=Date.now();
+            try {
+              const up=await fetch('https://openrouter.ai'+req.url,{method:req.method,headers:{'authorization':'Bearer '+process.env.OPENROUTER_API_KEY,'content-type':'application/json','x-title':'DSH cost guard benchmark'},body});
+              const text=await up.text();
+              let usage=null, model=null, id=null;
+              for(const line of text.split(/\r?\n/)){
+                if(!line.startsWith('data:')) continue;
+                const d=line.slice(5).trim(); if(!d || d==='[DONE]') continue;
+                try { const j=JSON.parse(d); if(j.usage) usage=j.usage; model=j.model||model; id=j.id||id; } catch {}
+              }
+              if(!usage){ try { const j=JSON.parse(text); usage=j.usage||null; model=j.model||null; id=j.id||null; } catch {} }
+              append({seq:n,status:up.status,request_bytes:body.length,message_chars:messageChars,roles,stream:obj?.stream??null,model_request:obj?.model??null,model_response:model,generation_id:id,usage,duration_ms:Date.now()-started});
+              res.writeHead(up.status,{'content-type':up.headers.get('content-type')||'application/json'}); res.end(text);
+            } catch(e){ append({seq:n,error:String(e),request_bytes:body.length,message_chars:messageChars,roles,duration_ms:Date.now()-started}); res.writeHead(502); res.end(JSON.stringify({error:String(e)})); }
+          });
+          server.listen(18080,'127.0.0.1',()=>console.log('meter-ready'));
+          NODE
+          node "$RUNNER_TEMP/openrouter-meter.mjs" > "$RUNNER_TEMP/meter-server.log" 2>&1 &
+          for i in {1..20}; do grep -q meter-ready "$RUNNER_TEMP/meter-server.log" && exit 0; sleep .25; done
+          cat "$RUNNER_TEMP/meter-server.log"; exit 1
+
+      - name: Run context-growth benchmark
+        id: dsh
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set +e
+          TASK=$(cat <<'EOF'
+          This is a controlled context-compaction benchmark. Use the bash tool exactly 16 times, sequentially, never combine calls. For call N from 1 through 16, run exactly: python -c "print('BLOCK_N_BEGIN'); print('x'*16000); print('BLOCK_N_END')" replacing N with that call number. After each bash result, immediately make the next bash call; do not summarize, quote, analyze, or discuss the x output. After all 16 calls, answer only BENCH_DONE. Do not stop early.
+          EOF
+          )
+          timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK" > "$RUNNER_TEMP/dsh-out.txt" 2> "$RUNNER_TEMP/dsh-err.txt"
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          set -e
+
+      - name: Read ending OpenRouter usage and analyze
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DSH_EXIT: ${{ steps.dsh.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          sleep 2
+          curl -fsS -H "Authorization: Bearer $OPENROUTER_API_KEY" https://openrouter.ai/api/v1/key > "$RUNNER_TEMP/key-after.json"
+          python - <<'PY'
+          import json,os
+          t=os.environ['RUNNER_TEMP']
+          def key_usage(p):
+            j=json.load(open(p)); return float((j.get('data') or {}).get('usage') or 0)
+          before=key_usage(t+'/key-before.json'); after=key_usage(t+'/key-after.json')
+          rows=[]
+          if os.path.exists(t+'/meter.jsonl'):
+            for line in open(t+'/meter.jsonl'):
+              try: rows.append(json.loads(line))
+              except: pass
+          pts=[]
+          for r in rows:
+            u=r.get('usage') or {}
+            pt=u.get('prompt_tokens',u.get('promptTokens'))
+            if isinstance(pt,(int,float)): pts.append(int(pt))
+          reqchars=[int(r.get('message_chars') or 0) for r in rows]
+          reset=False; reset_at=None; peak=0
+          for r in rows:
+            cur=int(r.get('message_chars') or 0)
+            if peak>100000 and cur < peak*0.65: reset=True; reset_at=r.get('seq'); break
+            peak=max(peak,cur)
+          peakpt=0
+          for i,pt in enumerate(pts):
+            if peakpt>40000 and pt < peakpt*0.65: reset=True; reset_at=reset_at or i+1; break
+            peakpt=max(peakpt,pt)
+          out={'status':'pass' if rows else 'fail','run_id':os.environ['GITHUB_RUN_ID'],'dsh_exit':int(os.environ.get('DSH_EXIT') or -1),'requests':len(rows),'usage_before_usd':before,'usage_after_usd':after,'benchmark_cost_usd':round(after-before,9),'request_message_chars':reqchars,'prompt_tokens':pts,'max_message_chars':max(reqchars) if reqchars else None,'max_prompt_tokens':max(pts) if pts else None,'compaction_reset_observed':reset,'reset_request_seq':reset_at,'guard':{'threshold_ratio':0.06,'nominal_threshold_tokens':60000,'retain_tokens':12000,'summary_max_tokens':4096},'output_tail':open(t+'/dsh-out.txt',errors='replace').read()[-300:] if os.path.exists(t+'/dsh-out.txt') else '', 'stderr_tail':open(t+'/dsh-err.txt',errors='replace').read()[-1000:] if os.path.exists(t+'/dsh-err.txt') else ''}
+          open(t+'/result.json','w').write(json.dumps(out,separators=(',',':')))
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Publish benchmark result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/result.json" || printf '{"status":"fail","run_id":"%s","error":"result_missing"}' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/result.json"
+          C="$(base64 -w0 "$RUNNER_TEMP/result.json")"
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-live-result.json?ref=main" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-live-result.json" -f message='Update DSH live cost benchmark [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-cost-guard-live-result.json" -f message='Publish DSH live cost benchmark [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
