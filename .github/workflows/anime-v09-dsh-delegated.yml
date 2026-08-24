@@ -1,4 +1,4 @@
-name: Anime Combat v0.9 DSH Delegated
+name: IBKR Reference RECREATE+ v0.11 via Existing DSH Slot
 
 on:
   push:
@@ -28,11 +28,11 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install media tools
+      - name: Install production tools
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg python3-opencv python3-numpy
+          sudo apt-get install -y -qq ffmpeg curl jq file librsvg2-bin
           bash scripts/setup-dsh-media-tools.sh
 
       - name: Configure DSH runtime
@@ -71,7 +71,7 @@ jobs:
             ~/.cache/runner6-dsh-runtime
             ~/.npm
           key: runner6-dsh-runtime-${{ runner.os }}-rc7-pwmcp078-v1
-          fail-on-cache-miss: true
+          fail-on-cache-miss: false
 
       - name: Activate DSH and browser
         run: |
@@ -79,42 +79,43 @@ jobs:
           bash scripts/activate-dsh-runtime.sh
           bash scripts/setup-dsh-playwright.sh .
 
-      - name: Give brief to DSH — source and music are NOT preselected
+      - name: DSH acquisition research and asset handoff
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p dsh-handoff/anime-v09-dsh-delegated
-          TASK='You own media selection for a NEW 20-second vertical anime-combat edit. The orchestrator is deliberately NOT giving you an anime, character, fight, source URL, or song. Use the Playwright browser and current public web information to research and select the production source AND the phonk/funk track yourself. Requirements: readability-first combat; recognizable hook quickly; strong continuous action or clearly separable action units; enough visual context to follow attacker/contact/counter/payoff; low dialogue dependence; good 9:16 resilience; strong source video quality; current social/edit relevance. Avoid the previously used Gojo vs Sukuna and Saitama vs Cosmic Garou sources, and avoid Murder In My Mind and METAMORPHOSIS so this is genuinely different. Compare at least 3 plausible source candidates and at least 3 plausible music candidates. Do not choose based on download convenience. Prefer a public YouTube source that can plausibly be acquired without login and is focused enough for extracting a strong 20-second section. For music, choose a currently recognizable phonk/funk edit track and identify title + artist; the production downloader will resolve the clean official-audio search after your choice. Create dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json with exactly these top-level keys: selected_source, source_candidates, selected_music, music_candidates, rationale. selected_source must contain title,url,anime_or_series,fight_or_scene,why_selected. selected_music must contain title,artist,why_selected. Each candidates array must contain at least 3 objects. rationale must explain why the selected pair should work specifically for a readable 20-second edit. Finish with DSH_SELECTION_READY.'
+          mkdir -p dsh-handoff/ibkr-recreate/raw
+          TASK='You are the DHS/DSH ACQUISITION LAYER for a v0.11 RECREATE+ production. Do not design, edit, animate, or render the final video. The production assistant has already reverse-engineered a 14.9-second vertical Interactive Brokers options-spreads ad and will rebuild its UI/motion natively in Remotion. Your job is only to research the current public web with Playwright, compare plausible sources, select, and hand off authentic visual source assets/references. Required: (1) a clean high-resolution Interactive Brokers brand/logo asset suitable on a dark background, ideally transparent SVG/PNG; (2) a high-quality mobile-app/options UI reference image that helps validate authentic IBKR visual language. Do NOT choose based on download convenience. Prioritize semantic match, recognizability/authenticity, visual quality, useful resolution, crop resilience, and retrievability. No official-first or copyright-safe-first restriction; however the selected brand asset must actually represent Interactive Brokers. Compare at least 3 logo candidates and at least 3 UI-reference candidates. For EACH candidate include source_name, page_url, asset_url, notes. asset_url must be a direct public image/SVG URL that opens without login; verify it before selecting. Write dsh-handoff/ibkr-recreate/dsh-selection.json with EXACT top-level keys: selected_logo, logo_candidates, selected_ui_reference, ui_candidates, rationale. selected_logo and selected_ui_reference must each contain source_name,page_url,asset_url,why_selected. rationale must explain why these handoff assets are suitable for reconstructing this specific dark blue/teal vertical options ad. Finish with DSH_SELECTION_READY.'
           set +e
           timeout --signal=TERM --kill-after=10s 300s "$DSH_BIN" --profile headless "$TASK"
           CODE=$?
           set -e
-          test -s dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json
-          python - <<'PY'
+          test -s dsh-handoff/ibkr-recreate/dsh-selection.json
+          python3 - <<'PY'
           import json
-          p=json.load(open('dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json'))
-          assert p['selected_source']['url'].startswith('http')
-          assert len(p['source_candidates']) >= 3
-          assert len(p['music_candidates']) >= 3
-          assert p['selected_music']['title'] and p['selected_music']['artist']
+          p=json.load(open('dsh-handoff/ibkr-recreate/dsh-selection.json'))
+          assert len(p['logo_candidates']) >= 3
+          assert len(p['ui_candidates']) >= 3
+          assert p['selected_logo']['asset_url'].startswith('http')
+          assert p['selected_ui_reference']['asset_url'].startswith('http')
           print(json.dumps(p,ensure_ascii=False,indent=2))
           PY
           if [ "$CODE" != 0 ] && [ "$CODE" != 124 ]; then exit "$CODE"; fi
 
-      - name: DSH-selected acquisition + Runner render
-        run: bash scripts/run-anime-v09-dsh-delegated-ci.sh
+      - name: Production assistant compositor render
+        run: bash scripts/run-ibkr-recreate-ci.sh
 
-      - name: Upload candidate for orchestrator visual review
+      - name: Upload reconstruction handoff
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: anime-v09-dsh-delegated-${{ github.run_id }}
+          name: ibkr-recreate-v011-${{ github.run_id }}
           path: |
-            dsh-handoff/anime-v09-dsh-delegated/dsh-selection.json
-            dsh-handoff/anime-v09-dsh-delegated/final/edit-plan.json
-            dsh-handoff/anime-v09-dsh-delegated/final/output-analysis/analysis.json
-            dsh-handoff/anime-v09-dsh-delegated/final/output-analysis/contact.jpg
-            dsh-handoff/anime-v09-dsh-delegated/final/SOURCE_MANIFEST.json
-            dsh-handoff/anime-v09-dsh-delegated/final/anime_combat_v09_dsh.mp4
-          retention-days: 2
-          if-no-files-found: error
+            dsh-handoff/ibkr-recreate/dsh-selection.json
+            dsh-handoff/ibkr-recreate/raw/
+            dsh-handoff/ibkr-recreate/final/ibkr_recreate_silent.mp4
+            dsh-handoff/ibkr-recreate/final/qa-contact.jpg
+            dsh-handoff/ibkr-recreate/final/qa.json
+            dsh-handoff/ibkr-recreate/final/reconstruction-spec.json
+          retention-days: 3
+          if-no-files-found: warn
