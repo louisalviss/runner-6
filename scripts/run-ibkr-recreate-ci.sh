@@ -34,24 +34,41 @@ python3 - <<'PY'
 import json, subprocess
 from pathlib import Path
 p=Path('dsh-handoff/ibkr-recreate/final/ibkr_recreate_silent.mp4')
-raw=subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-show_entries','stream=codec_type,codec_name,width,height','-of','json',str(p)],text=True)
+raw=subprocess.check_output([
+  'ffprobe','-v','error',
+  '-show_entries','format=duration',
+  '-show_entries','stream=codec_type,codec_name,width,height,sample_rate,channels',
+  '-of','json',str(p)
+],text=True)
 x=json.loads(raw)
 video=next(s for s in x['streams'] if s['codec_type']=='video')
+audio=next((s for s in x['streams'] if s['codec_type']=='audio'),None)
 dur=float(x['format']['duration'])
 qa={
   'resolution':[int(video['width']),int(video['height'])],
   'video_codec':video['codec_name'],
   'duration':dur,
   'expected_creative_duration':14.9,
-  'has_audio':any(s['codec_type']=='audio' for s in x['streams']),
+  'has_audio':audio is not None,
+  'audio_codec': audio['codec_name'] if audio else None,
+  'sample_rate': int(audio['sample_rate']) if audio and audio.get('sample_rate') else None,
+  'channels': int(audio['channels']) if audio and audio.get('channels') else None,
   'production_route':'reference teardown -> spec -> native Remotion/DOM/SVG -> local reference audio -> final QC',
   'external_acquisition_required':False
 }
-qa['pass']=qa['resolution']==[1080,1920] and qa['video_codec']=='h264' and 14.7<=dur<=15.1 and qa['has_audio'] is False
+qa['pass']=(
+  qa['resolution']==[1080,1920]
+  and qa['video_codec']=='h264'
+  and 14.7<=dur<=15.1
+  and qa['has_audio'] is True
+  and qa['audio_codec']=='aac'
+  and qa['sample_rate']==48000
+  and qa['channels']==2
+)
 Path('dsh-handoff/ibkr-recreate/final/qa.json').write_text(json.dumps(qa,indent=2))
 assert qa['pass'], qa
 print(json.dumps(qa,indent=2))
 PY
 
 cp ibkr-reconstruction-spec.json "$FINAL/reconstruction-spec.json"
-echo 'IBKR RECREATE+ NATIVE SILENT RENDER PASS'
+echo 'IBKR RECREATE+ NATIVE AUDIO RENDER PASS'
