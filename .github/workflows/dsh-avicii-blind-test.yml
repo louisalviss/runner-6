@@ -31,93 +31,104 @@ jobs:
           python -m pip install -q shazamio
 
       - name: Secret random selection
-        id: pick
         shell: bash
         run: |
           set -euo pipefail
           YTDLP="$HOME/.local/bin/yt-dlp"
           mkdir -p "$RUNNER_TEMP/blind"
-          "$YTDLP" --flat-playlist --dump-single-json "ytsearch30:Avicii - Topic" > "$RUNNER_TEMP/blind/search.json" 2>/dev/null
+          "$YTDLP" --flat-playlist --dump-single-json "ytsearch40:Avicii Topic" > "$RUNNER_TEMP/blind/search.json" 2>/dev/null
           python - <<'PY'
           import json, random, os
           from pathlib import Path
-          p=json.load(open(os.environ['RUNNER_TEMP']+'/blind/search.json'))
+          root=Path(os.environ['RUNNER_TEMP'])/'blind'
+          p=json.loads((root/'search.json').read_text())
           entries=p.get('entries') or []
           good=[]
+          bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour')
           for e in entries:
-              title=(e.get('title') or '').lower()
-              channel=(e.get('channel') or e.get('uploader') or '').lower()
-              if not e.get('id'): continue
-              if 'avicii' not in title and 'avicii' not in channel: continue
-              bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake')
-              if any(x in title for x in bad): continue
+              title=(e.get('title') or '').strip()
+              channel=(e.get('channel') or e.get('uploader') or '').strip()
+              low=(title+' '+channel).lower()
+              if not e.get('id') or 'avicii' not in low: continue
+              if any(x in low for x in bad): continue
               good.append(e)
           if not good:
               raise SystemExit('No usable Avicii candidates')
           e=random.SystemRandom().choice(good)
           url=e.get('url') or ('https://www.youtube.com/watch?v='+e['id'])
-          if not url.startswith('http'):
+          if not str(url).startswith('http'):
               url='https://www.youtube.com/watch?v='+e['id']
-          Path(os.environ['RUNNER_TEMP']+'/blind/selected_url.txt').write_text(url)
+          secret={
+              'source_title': e.get('title'),
+              'source_uploader': e.get('channel') or e.get('uploader'),
+              'source_id': e.get('id'),
+              'source_url': url,
+          }
+          (root/'selected_url.txt').write_text(url)
+          (root/'secret_selection.json').write_text(json.dumps(secret,ensure_ascii=False,indent=2))
           PY
-          echo "url=$(cat "$RUNNER_TEMP/blind/selected_url.txt")" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/blind/search.json"
 
       - name: DHS acquire selected audio
-        id: acquire
         run: |
           set -euo pipefail
           rm -rf dsh-handoff
-          bash scripts/dsh-download-media.sh "${{ steps.pick.outputs.url }}#dsh-audio" 720 >/dev/null
-          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
-          test -s "$P"
-          echo "path=$P" >> "$GITHUB_OUTPUT"
+          URL="$(cat "$RUNNER_TEMP/blind/selected_url.txt")"
+          bash scripts/dsh-download-media.sh "${URL}#dsh-audio" 720 >/dev/null 2>&1
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p=json.load(open('dsh-handoff/handoff.json'))['relative_path']
+          if not Path(p).is_file() or Path(p).stat().st_size == 0:
+              raise SystemExit('DHS returned no audio')
+          (Path(os.environ['RUNNER_TEMP'])/'blind'/'source_path.txt').write_text(p)
+          PY
 
-      - name: Make blind random clip and secret truth
+      - name: Make random blind clip
         run: |
           set -euo pipefail
-          SRC='${{ steps.acquire.outputs.path }}'
-          URL='${{ steps.pick.outputs.url }}'
-          YTDLP="$HOME/.local/bin/yt-dlp"
-          "$YTDLP" --dump-single-json --skip-download "$URL" > "$RUNNER_TEMP/blind/source.json" 2>/dev/null
-          python - "$SRC" <<'PY'
-          import json, os, random, subprocess, sys
+          python - <<'PY'
+          import json, os, random, subprocess
           from pathlib import Path
-          src=sys.argv[1]
-          info=json.load(open(os.environ['RUNNER_TEMP']+'/blind/source.json'))
+          root=Path(os.environ['RUNNER_TEMP'])/'blind'
+          src=(root/'source_path.txt').read_text().strip()
+          info=json.loads((root/'secret_selection.json').read_text())
           probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json',src]))
           dur=float(probe['format']['duration'])
           clip_len=12.0
           lo=10.0 if dur > 45 else 0.0
           hi=max(lo, dur-clip_len-8.0)
           start=random.SystemRandom().uniform(lo,hi) if hi>lo else lo
-          truth={
-              'source_title': info.get('title'),
-              'source_uploader': info.get('uploader') or info.get('channel'),
-              'source_url': info.get('webpage_url') or info.get('original_url'),
-              'duration_seconds': dur,
-              'clip_start_seconds': start,
-              'clip_duration_seconds': clip_len
-          }
-          Path(os.environ['RUNNER_TEMP']+'/blind/truth.json').write_text(json.dumps(truth,ensure_ascii=False,indent=2))
-          Path(os.environ['RUNNER_TEMP']+'/blind/start.txt').write_text(f'{start:.6f}')
+          truth={**info,'duration_seconds':dur,'clip_start_seconds':start,'clip_duration_seconds':clip_len}
+          (root/'truth.json').write_text(json.dumps(truth,ensure_ascii=False,indent=2))
+          subprocess.run([
+              'ffmpeg','-hide_banner','-loglevel','error','-ss',f'{start:.6f}','-i',src,'-t','12',
+              '-map_metadata','-1','-vn','-ac','2','-ar','44100','-codec:a','libmp3lame','-b:a','192k',
+              str(root/'blind_clip.mp3')
+          ],check=True)
+          if not (root/'blind_clip.mp3').is_file() or (root/'blind_clip.mp3').stat().st_size == 0:
+              raise SystemExit('Blind clip was not created')
+          # Destroy all selection/source hints before recognition.
+          try: Path(src).unlink()
+          except FileNotFoundError: pass
+          for name in ('selected_url.txt','secret_selection.json','source_path.txt'):
+              try: (root/name).unlink()
+              except FileNotFoundError: pass
+          try: Path('dsh-handoff/handoff.json').unlink()
+          except FileNotFoundError: pass
           PY
-          START="$(cat "$RUNNER_TEMP/blind/start.txt")"
-          ffmpeg -hide_banner -loglevel error -ss "$START" -i "$SRC" -t 12 \
-            -map_metadata -1 -vn -ac 2 -ar 44100 -codec:a libmp3lame -b:a 192k \
-            "$RUNNER_TEMP/blind/blind_clip.mp3"
-          test -s "$RUNNER_TEMP/blind/blind_clip.mp3"
 
       - name: Recognize blind clip only
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/blind"
-          rm -f search.json source.json selected_url.txt start.txt
           python - <<'PY'
           import asyncio, json
           from pathlib import Path
           from shazamio import Shazam
           async def main():
-              out=await Shazam(segment_duration_seconds=10).recognize('blind_clip.mp3')
+              # 12 s recognizer window == full 12 s clip, so match offset maps to clip start.
+              out=await Shazam(segment_duration_seconds=12).recognize('blind_clip.mp3')
               track=out.get('track') or {}
               matches=out.get('matches') or []
               m=matches[0] if matches else {}
