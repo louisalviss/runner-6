@@ -1,0 +1,166 @@
+name: DHS Avicii Blind Audio Test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-avicii-blind-trigger.txt"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runner-6-dsh-avicii-blind-test
+  cancel-in-progress: false
+
+jobs:
+  blind-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+          python -m pip install -q shazamio
+
+      - name: Secret random selection
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          YTDLP="$HOME/.local/bin/yt-dlp"
+          mkdir -p "$RUNNER_TEMP/blind"
+          "$YTDLP" --flat-playlist --dump-single-json "ytsearch30:Avicii - Topic" > "$RUNNER_TEMP/blind/search.json" 2>/dev/null
+          python - <<'PY'
+          import json, random, os
+          from pathlib import Path
+          p=json.load(open(os.environ['RUNNER_TEMP']+'/blind/search.json'))
+          entries=p.get('entries') or []
+          good=[]
+          for e in entries:
+              title=(e.get('title') or '').lower()
+              channel=(e.get('channel') or e.get('uploader') or '').lower()
+              if not e.get('id'): continue
+              if 'avicii' not in title and 'avicii' not in channel: continue
+              bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake')
+              if any(x in title for x in bad): continue
+              good.append(e)
+          if not good:
+              raise SystemExit('No usable Avicii candidates')
+          e=random.SystemRandom().choice(good)
+          url=e.get('url') or ('https://www.youtube.com/watch?v='+e['id'])
+          if not url.startswith('http'):
+              url='https://www.youtube.com/watch?v='+e['id']
+          Path(os.environ['RUNNER_TEMP']+'/blind/selected_url.txt').write_text(url)
+          PY
+          echo "url=$(cat "$RUNNER_TEMP/blind/selected_url.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: DHS acquire selected audio
+        id: acquire
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff
+          bash scripts/dsh-download-media.sh "${{ steps.pick.outputs.url }}#dsh-audio" 720 >/dev/null
+          P="$(python -c "import json;print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])")"
+          test -s "$P"
+          echo "path=$P" >> "$GITHUB_OUTPUT"
+
+      - name: Make blind random clip and secret truth
+        run: |
+          set -euo pipefail
+          SRC='${{ steps.acquire.outputs.path }}'
+          URL='${{ steps.pick.outputs.url }}'
+          YTDLP="$HOME/.local/bin/yt-dlp"
+          "$YTDLP" --dump-single-json --skip-download "$URL" > "$RUNNER_TEMP/blind/source.json" 2>/dev/null
+          python - "$SRC" <<'PY'
+          import json, os, random, subprocess, sys
+          from pathlib import Path
+          src=sys.argv[1]
+          info=json.load(open(os.environ['RUNNER_TEMP']+'/blind/source.json'))
+          probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','json',src]))
+          dur=float(probe['format']['duration'])
+          clip_len=12.0
+          lo=10.0 if dur > 45 else 0.0
+          hi=max(lo, dur-clip_len-8.0)
+          start=random.SystemRandom().uniform(lo,hi) if hi>lo else lo
+          truth={
+              'source_title': info.get('title'),
+              'source_uploader': info.get('uploader') or info.get('channel'),
+              'source_url': info.get('webpage_url') or info.get('original_url'),
+              'duration_seconds': dur,
+              'clip_start_seconds': start,
+              'clip_duration_seconds': clip_len
+          }
+          Path(os.environ['RUNNER_TEMP']+'/blind/truth.json').write_text(json.dumps(truth,ensure_ascii=False,indent=2))
+          Path(os.environ['RUNNER_TEMP']+'/blind/start.txt').write_text(f'{start:.6f}')
+          PY
+          START="$(cat "$RUNNER_TEMP/blind/start.txt")"
+          ffmpeg -hide_banner -loglevel error -ss "$START" -i "$SRC" -t 12 \
+            -map_metadata -1 -vn -ac 2 -ar 44100 -codec:a libmp3lame -b:a 192k \
+            "$RUNNER_TEMP/blind/blind_clip.mp3"
+          test -s "$RUNNER_TEMP/blind/blind_clip.mp3"
+
+      - name: Recognize blind clip only
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/blind"
+          rm -f search.json source.json selected_url.txt start.txt
+          python - <<'PY'
+          import asyncio, json
+          from pathlib import Path
+          from shazamio import Shazam
+          async def main():
+              out=await Shazam(segment_duration_seconds=10).recognize('blind_clip.mp3')
+              track=out.get('track') or {}
+              matches=out.get('matches') or []
+              m=matches[0] if matches else {}
+              guess={
+                  'recognized': bool(track),
+                  'title': track.get('title'),
+                  'artist': track.get('subtitle'),
+                  'shazam_track_key': track.get('key'),
+                  'match_offset_seconds': m.get('offset'),
+                  'match_time_skew': m.get('timeskew'),
+                  'match_frequency_skew': m.get('frequencyskew')
+              }
+              Path('guess.json').write_text(json.dumps(guess,ensure_ascii=False,indent=2))
+          asyncio.run(main())
+          PY
+
+      - name: Publish guess and truth separately
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          publish() {
+            local src="$1" dst="$2" msg="$3"
+            local c s
+            c="$(base64 -w0 "$src")"
+            s="$(gh api "repos/$GITHUB_REPOSITORY/contents/$dst?ref=main" --jq .sha 2>/dev/null || true)"
+            if [ -n "$s" ]; then
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$dst" -f message="$msg [skip ci]" -f content="$c" -f sha="$s" -f branch=main >/dev/null
+            else
+              gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$dst" -f message="$msg [skip ci]" -f content="$c" -f branch=main >/dev/null
+            fi
+          }
+          publish "$RUNNER_TEMP/blind/guess.json" "dsh-avicii-blind-guess.json" "Publish blind Avicii recognition guess"
+          publish "$RUNNER_TEMP/blind/truth.json" "dsh-avicii-blind-truth.json" "Publish blind Avicii recognition truth"
+
+      - name: Upload blind clip proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-avicii-blind-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/blind/blind_clip.mp3
+            ${{ runner.temp }}/blind/guess.json
+            ${{ runner.temp }}/blind/truth.json
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
