@@ -32,11 +32,11 @@ jobs:
             -e "$LICENSE_PAGE" "$MUSIC_URL" -o licensed-audio/slay-sped-up.mp3
           test "$(stat -c '%s' licensed-audio/slay-sped-up.mp3)" -gt 500000
           cat > licensed-audio/MUSIC_CREDIT.txt <<'CREDIT'
-Slay (Sped Up) by Alex-Productions | https://onsound.eu/
-Royalty Free Music by https://www.free-stock-music.com
-Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
-https://creativecommons.org/licenses/by/3.0/deed.en_US
-CREDIT
+          Slay (Sped Up) by Alex-Productions | https://onsound.eu/
+          Royalty Free Music by https://www.free-stock-music.com
+          Creative Commons / Attribution 3.0 Unported License (CC BY 3.0)
+          https://creativecommons.org/licenses/by/3.0/deed.en_US
+          CREDIT
       - uses: actions/upload-artifact@v4
         with:
           name: licensed-slay-${{ github.run_id }}
