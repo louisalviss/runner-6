@@ -45,15 +45,18 @@ jobs:
           entries=p.get('entries') or []
           good=[]
           bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour')
+          excluded_ids={'d1-DCYL7Fng'}
+          excluded_titles={'dear boy'}
           for e in entries:
               title=(e.get('title') or '').strip()
               channel=(e.get('channel') or e.get('uploader') or '').strip()
               low=(title+' '+channel).lower()
               if not e.get('id') or 'avicii' not in low: continue
+              if e.get('id') in excluded_ids or title.lower() in excluded_titles: continue
               if any(x in low for x in bad): continue
               good.append(e)
           if not good:
-              raise SystemExit('No usable Avicii candidates')
+              raise SystemExit('No usable Avicii candidates after exclusions')
           e=random.SystemRandom().choice(good)
           url=e.get('url') or ('https://www.youtube.com/watch?v='+e['id'])
           if not str(url).startswith('http'):
@@ -108,7 +111,6 @@ jobs:
           ],check=True)
           if not (root/'blind_clip.mp3').is_file() or (root/'blind_clip.mp3').stat().st_size == 0:
               raise SystemExit('Blind clip was not created')
-          # Destroy all selection/source hints before recognition.
           try: Path(src).unlink()
           except FileNotFoundError: pass
           for name in ('selected_url.txt','secret_selection.json','source_path.txt'):
@@ -127,7 +129,6 @@ jobs:
           from pathlib import Path
           from shazamio import Shazam
           async def main():
-              # 12 s recognizer window == full 12 s clip, so match offset maps to clip start.
               out=await Shazam(segment_duration_seconds=12).recognize('blind_clip.mp3')
               track=out.get('track') or {}
               matches=out.get('matches') or []
