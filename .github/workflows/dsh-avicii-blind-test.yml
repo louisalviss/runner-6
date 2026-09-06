@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           YTDLP="$HOME/.local/bin/yt-dlp"
           mkdir -p "$RUNNER_TEMP/blind"
-          "$YTDLP" --flat-playlist --dump-single-json "ytsearch40:Avicii Topic" > "$RUNNER_TEMP/blind/search.json" 2>/dev/null
+          "$YTDLP" --flat-playlist --dump-single-json "ytsearch60:Avicii Topic" > "$RUNNER_TEMP/blind/search.json" 2>/dev/null
           python - <<'PY'
           import json, random, os
           from pathlib import Path
@@ -44,19 +44,20 @@ jobs:
           p=json.loads((root/'search.json').read_text())
           entries=p.get('entries') or []
           good=[]
-          bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour','avicii by avicii','remix','radio edit','extended mix','edit')
-          excluded_ids={'d1-DCYL7Fng','CWx4i-TUdWo'}
-          excluded_titles={'dear boy','addicted to you (avicii by avicii)'}
+          bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour','avicii by avicii','remix','radio edit','extended mix','edit','version','acoustic','live')
+          excluded_ids={'d1-DCYL7Fng','CWx4i-TUdWo','wDuoOapZ9Z0'}
+          excluded_titles={'dear boy','addicted to you (avicii by avicii)','levels (original version)'}
           for e in entries:
               title=(e.get('title') or '').strip()
               channel=(e.get('channel') or e.get('uploader') or '').strip()
               low=(title+' '+channel).lower()
               if not e.get('id') or 'avicii' not in low: continue
               if e.get('id') in excluded_ids or title.lower() in excluded_titles: continue
+              if '(' in title or ')' in title or '[' in title or ']' in title: continue
               if any(x in low for x in bad): continue
               good.append(e)
           if not good:
-              raise SystemExit('No usable Avicii candidates after exclusions')
+              raise SystemExit('No clean canonical Avicii candidates after exclusions')
           e=random.SystemRandom().choice(good)
           url=e.get('url') or ('https://www.youtube.com/watch?v='+e['id'])
           if not str(url).startswith('http'):
