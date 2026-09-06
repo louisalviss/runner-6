@@ -1,0 +1,48 @@
+name: DHS Dear Boy Source Clip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dsh-dear-boy-trigger.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-6-dsh-dear-boy-source
+  cancel-in-progress: false
+
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install media tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          bash scripts/setup-dsh-media-tools.sh
+      - name: DHS acquire Dear Boy audio
+        run: |
+          set -euo pipefail
+          rm -rf dsh-handoff out
+          mkdir -p out
+          bash scripts/dsh-download-media.sh "https://www.youtube.com/watch?v=d1-DCYL7Fng#dsh-audio" 720 >/dev/null 2>&1
+          SRC="$(python - <<'PY'
+import json
+print(json.load(open('dsh-handoff/handoff.json'))['relative_path'])
+PY
+)"
+          test -s "$SRC"
+          ffmpeg -hide_banner -loglevel error -ss 282 -i "$SRC" -t 36 -vn -ac 2 -ar 44100 -c:a pcm_s16le out/dear_boy_282_318.wav
+      - name: Upload source clip
+        uses: actions/upload-artifact@v4
+        with:
+          name: dear-boy-source-${{ github.run_id }}
+          path: out/dear_boy_282_318.wav
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
