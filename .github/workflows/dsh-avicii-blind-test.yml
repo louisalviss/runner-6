@@ -44,9 +44,9 @@ jobs:
           p=json.loads((root/'search.json').read_text())
           entries=p.get('entries') or []
           good=[]
-          bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour')
-          excluded_ids={'d1-DCYL7Fng'}
-          excluded_titles={'dear boy'}
+          bad=('cover','reaction','tutorial','piano','karaoke','8d','slowed','sped up','nightcore','instrumental remake','mix compilation','hour','avicii by avicii','remix','radio edit','extended mix','edit')
+          excluded_ids={'d1-DCYL7Fng','CWx4i-TUdWo'}
+          excluded_titles={'dear boy','addicted to you (avicii by avicii)'}
           for e in entries:
               title=(e.get('title') or '').strip()
               channel=(e.get('channel') or e.get('uploader') or '').strip()
