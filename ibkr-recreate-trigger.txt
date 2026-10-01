@@ -1,0 +1,5 @@
+reference=ScreenRecording_08-24-2026_8-15-07_SA_1
+mode=RECREATE+
+flow=AI-Video-Motion-First-v0.11
+creative=0.8-15.7s
+run=2026-08-25T02:56+07:00

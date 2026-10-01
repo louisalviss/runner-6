@@ -1,0 +1,13 @@
+{
+  "name": "ibkr-reference-recreate",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.jsx IBKRRecreate out/ibkr_recreate_silent.mp4 --codec=h264 --crf=17 --pixel-format=yuv420p --concurrency=2"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "remotion": "^4.0.0"
+  }
+}
