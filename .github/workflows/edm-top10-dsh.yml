@@ -1,0 +1,94 @@
+name: EDM Top10 DSH Delegated Render
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'edm-top10-dsh-trigger.txt'
+      - 'dsh-checkpoints/edm-top10-selection.json'
+      - 'scripts/render-edm-top10-dsh.py'
+      - 'scripts/run-edm-top10-dsh-ci.sh'
+      - '.github/workflows/edm-top10-dsh.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: edm-top10-dsh-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install media tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg python3-opencv python3-numpy fonts-dejavu-core
+          python3 -m pip install -q pillow
+          bash scripts/setup-dsh-media-tools.sh
+
+      - name: Restore validated DSH media-selection checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dsh-handoff/edm-top10-dsh
+          cp dsh-checkpoints/edm-top10-selection.json dsh-handoff/edm-top10-dsh/dsh-selection.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open('dsh-handoff/edm-top10-dsh/dsh-selection.json'))
+          assert sorted(int(x['rank']) for x in p['tracks']) == list(range(1,11))
+          assert len(p['tracks']) == 10
+          for x in p['tracks']:
+              s=x['selected_source']
+              assert s['url'].startswith('http') and s['title'] and float(s['start_sec']) >= 0
+          print('Validated DSH checkpoint restored: 10/10 tracks')
+          PY
+
+      - name: DSH handoff acquisition then compositor render
+        shell: bash
+        run: bash scripts/run-edm-top10-dsh-ci.sh
+
+      - name: Technical QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=dsh-handoff/edm-top10-dsh/final
+          test -s "$ROOT/edm_top10_nostalgia.mp4"
+          test -s "$ROOT/qa-contact.jpg"
+          test -s "$ROOT/qa.json"
+          test -s "$ROOT/timeline.json"
+          test -s "$ROOT/SOURCE_MANIFEST.json"
+          ffmpeg -nostdin -v error -i "$ROOT/edm_top10_nostalgia.mp4" -f null -
+          python3 - <<'PY'
+          import json
+          q=json.load(open('dsh-handoff/edm-top10-dsh/final/qa.json'))
+          assert q['pass'] is True
+          assert q['resolution']==[1080,1920]
+          assert q['video_codec']=='h264'
+          assert q['audio_codec']=='aac'
+          assert q['sample_rate']==48000
+          assert 59.0 <= q['duration'] <= 60.0
+          print(json.dumps(q,indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: edm-top10-dsh-${{ github.run_id }}
+          path: |
+            dsh-handoff/edm-top10-dsh/dsh-selection.json
+            dsh-handoff/edm-top10-dsh/final/edm_top10_nostalgia.mp4
+            dsh-handoff/edm-top10-dsh/final/qa-contact.jpg
+            dsh-handoff/edm-top10-dsh/final/qa.json
+            dsh-handoff/edm-top10-dsh/final/timeline.json
+            dsh-handoff/edm-top10-dsh/final/SOURCE_MANIFEST.json
+          retention-days: 3
+          if-no-files-found: warn

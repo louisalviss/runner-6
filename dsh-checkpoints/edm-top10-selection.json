@@ -1,0 +1,15 @@
+{
+  "rationale": "Validated DSH media-selection checkpoint from successful run 32616724096. Official status is not a policy or requirement; these sources were selected by DSH for recognizability, strong audio/visual moments, vertical-crop usability and source quality.",
+  "tracks": [
+    {"rank":10,"song":"Tsunami","artist":"DVBBS & Borgeous","selected_source":{"title":"DVBBS & Borgeous - TSUNAMI (Original Mix)","url":"https://www.youtube.com/watch?v=0EWbonj7f18","start_sec":60,"why_selected":"Strong recognizable drop and usable visual source selected by DSH."}},
+    {"rank":9,"song":"Heroes (We Could Be)","artist":"Alesso ft. Tove Lo","selected_source":{"title":"Alesso - Heroes (we could be) ft. Tove Lo","url":"https://www.youtube.com/watch?v=a7SouU3ECpU","start_sec":90,"why_selected":"Recognizable chorus and cinematic visual source selected by DSH."}},
+    {"rank":8,"song":"The Nights","artist":"Avicii","selected_source":{"title":"Avicii - The Nights","url":"https://www.youtube.com/watch?v=UtF6Jej8yb4","start_sec":60,"why_selected":"Fast-cut nostalgic adventure visuals and recognizable anthem section selected by DSH."}},
+    {"rank":7,"song":"Summer","artist":"Calvin Harris","selected_source":{"title":"Calvin Harris - Summer","url":"https://www.youtube.com/watch?v=ebXbLfLACGM","start_sec":55,"why_selected":"High-energy summer/racing visuals and recognizable drop selected by DSH."}},
+    {"rank":6,"song":"Titanium","artist":"David Guetta ft. Sia","selected_source":{"title":"David Guetta - Titanium ft. Sia","url":"https://www.youtube.com/watch?v=JRfuAukYTKg","start_sec":75,"why_selected":"Strong cinematic visuals and iconic vocal section selected by DSH."}},
+    {"rank":5,"song":"Animals","artist":"Martin Garrix","selected_source":{"title":"Martin Garrix - Animals","url":"https://www.youtube.com/watch?v=gCYcHz2k5x0","start_sec":55,"why_selected":"Iconic big-room drop and energetic club visuals selected by DSH."}},
+    {"rank":4,"song":"Don't You Worry Child","artist":"Swedish House Mafia","selected_source":{"title":"Swedish House Mafia ft. John Martin - Don't You Worry Child","url":"https://www.youtube.com/watch?v=1y6smkh6c-0","start_sec":90,"why_selected":"Emotional anthem section and crowd/performance imagery selected by DSH."}},
+    {"rank":3,"song":"Clarity","artist":"Zedd ft. Foxes","selected_source":{"title":"Zedd - Clarity ft. Foxes","url":"https://www.youtube.com/watch?v=IxxstCcJlsc","start_sec":60,"why_selected":"Recognizable chorus and cinematic visuals selected by DSH."}},
+    {"rank":2,"song":"Wake Me Up","artist":"Avicii","selected_source":{"title":"Avicii - Wake Me Up","url":"https://www.youtube.com/watch?v=IcrbM1l_BoI","start_sec":120,"why_selected":"Iconic folk-EDM anthem section and strong narrative visuals selected by DSH."}},
+    {"rank":1,"song":"Levels","artist":"Avicii","selected_source":{"title":"Avicii - Levels","url":"https://www.youtube.com/watch?v=_ovdm2yX4MA","start_sec":60,"why_selected":"Defining synth hook and recognizable joyful visual source selected by DSH."}}
+  ]
+}
