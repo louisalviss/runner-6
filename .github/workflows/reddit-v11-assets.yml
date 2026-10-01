@@ -1,0 +1,43 @@
+name: Reddit V11 Footage Assets
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/reddit-v11-assets.yml'
+      - 'reddit-v11-assets-trigger.txt'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download real B-roll assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          mkdir -p assets/reddit-v11
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36'
+          dl(){
+            id="$1"; out="$2"
+            curl -L --fail --retry 4 --retry-delay 2 -A "$UA" "https://www.pexels.com/download/video/${id}/" -o "$out"
+            test -s "$out"
+            ffprobe -v error -show_entries format=duration -show_entries stream=width,height -of json "$out"
+          }
+          dl 19332990 assets/reddit-v11/nyc.mp4
+          dl 7272375 assets/reddit-v11/laptop.mp4
+          dl 9902310 assets/reddit-v11/pills.mp4
+          dl 5203510 assets/reddit-v11/hospital.mp4
+          dl 8983989 assets/reddit-v11/corridor.mp4
+          dl 12929231 assets/reddit-v11/river.mp4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reddit-v11-footage-${{ github.run_id }}
+          path: assets/reddit-v11/*.mp4
+          retention-days: 2
+          compression-level: 0
+          if-no-files-found: error
