@@ -21,18 +21,21 @@ if [ ! -x "$ROOT/node_modules/.bin/dsh" ] || [ ! -f "$ROOT/node_modules/@playwri
 {
   "private": true,
   "name": "runner6-dsh-runtime",
-  "version": "1.0.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@deepseek-ai/dsh-subprocess-local",
-      "@google/genai",
-      "koffi",
-      "node-pty",
-      "protobufjs"
-    ]
-  }
+  "version": "1.0.0"
 }
 JSON
+  # pnpm 11 removed package.json pnpm.onlyBuiltDependencies; approve exactly
+  # the native/build deps required by the pinned DSH runtime.
+  cat > "$ROOT/pnpm-workspace.yaml" <<'YAML'
+packages:
+  - "."
+allowBuilds:
+  "@deepseek-ai/dsh-subprocess-local": true
+  "@google/genai": true
+  koffi: true
+  node-pty: true
+  protobufjs: true
+YAML
   pnpm --dir "$ROOT" --store-dir "$STORE" add --prod \
     "@deepseek-ai/dsh@$DSH_VER" \
     "@playwright/mcp@$PW_VER"
