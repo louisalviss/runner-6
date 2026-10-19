@@ -177,9 +177,29 @@ jobs:
         if: steps.decrypt.outputs.ready == 'true'
         run: timeout 20s "$DSH_BIN" --version
 
+      - name: Validate DSH composed profile without calling model
+        id: dsh_preflight
+        if: steps.decrypt.outputs.ready == 'true'
+        run: |
+          set +e
+          timeout 20s "$DSH_BIN" --profile headless --dump-config > "$RUNNER_TEMP/dsh-profile-dump.txt" 2> "$RUNNER_TEMP/dsh-profile-error.txt"
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" = 0 ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; else echo "ok=false" >> "$GITHUB_OUTPUT"; fi
+          python - <<'PY'
+          import os,re
+          from pathlib import Path
+          t=Path(os.environ["RUNNER_TEMP"])
+          dump=(t/"dsh-profile-dump.txt").read_text(errors="replace")
+          err=(t/"dsh-profile-error.txt").read_text(errors="replace")
+          words=("error","profile","headless","bundle","module","patch","cordis","not","found","missing","unknown","model","settings","schema","yaml","mcp","browser","invalid","plugin","resolve","import","failed","config","duplicate","no","such","file")
+          hits=[v for v in words if re.search(r"\b"+re.escape(v)+r"\b",err,re.I)]
+          print("DSH_PREFLIGHT_SAFE stderr_flags="+(",".join(hits) or "none")+" stderr_len="+str(len(err))+" dump_len="+str(len(dump))+" compaction_row="+str("compaction-basic" in dump)+" browser_row="+str("browser-playwright-mcp" in dump))
+          PY
       - name: Run DSH brain
         id: run_dsh
-        if: steps.decrypt.outputs.ready == 'true'
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
