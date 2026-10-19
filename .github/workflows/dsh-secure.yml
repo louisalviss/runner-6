@@ -264,6 +264,13 @@ jobs:
             filtered=[w if w in public_vocab else "_" for w in tokens[:30]]
             if filtered:print("DSH_SAFE_LINE_"+str(idx)+" "+" ".join(filtered))
 
+          for ln in err.splitlines():
+            if "is not a function" in ln:
+              expression=ln.split("is not a function",1)[0]
+              identifiers=re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*",expression)
+              picked=[x for x in identifiers[-4:] if len(x)<=52 and x.lower() not in ("typeerror","error")]
+              print("DSH_SAFE_MISSING_METHOD "+",".join(picked))
+              break
           print("DSH_SAFE_WORDS "+",".join(safe_hits[:35]))
           print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
           PY
