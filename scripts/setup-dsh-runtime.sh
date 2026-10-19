@@ -4,7 +4,7 @@ set -euo pipefail
 DSH_VER="${DSH_VERSION:-0.1.0-rc.7}"
 PW_VER="${PLAYWRIGHT_MCP_VERSION:-0.0.78}"
 PNPM_VER="${PNPM_VERSION:-11.7.0}"
-HMR_VER="1.0.18"
+HMR_VER="1.0.17"
 ROOT="${DSH_RUNTIME_ROOT:-$HOME/.cache/runner6-dsh-runtime/rc7-pwmcp078-pnpm}"
 STORE="${PNPM_STORE_DIR:-$HOME/.cache/runner6-pnpm-store}"
 STAMP="$ROOT/.versions"
@@ -37,7 +37,7 @@ allowBuilds:
   node-pty: true
   protobufjs: true
 overrides:
-  "@deepseek-ai/cordis-plugin-hmr": "1.0.18"
+  "@deepseek-ai/cordis-plugin-hmr": "1.0.17"
 YAML
   pnpm --dir "$ROOT" --store-dir "$STORE" add --prod \
     "@deepseek-ai/dsh@$DSH_VER" \
