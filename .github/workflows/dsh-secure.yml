@@ -218,6 +218,9 @@ jobs:
             "tool_error":r"(tool execution|tool call|browser error)",
           }
           flags=[name for name,pat in signatures.items() if re.search(pat,combined)]
+          safe_terms=("error","failed","cannot","could","resolve","module","require","import","package","exports","plugin","plugins","cordova","cordis","patch","configuration","config","profile","invalid","unknown","model","provider","api","key","yaml","parse","json","schema","mcp","browser","server","tool","node","pty","koffi","file","directory","permission","spawn","timeout","undefined","startup","initialize","initialization","object","function","argument","option","missing","script","process","dependency","environment","runtime","disabled","duplicate")
+          safe_hits=[x for x in safe_terms if re.search(r"\b"+re.escape(x)+r"\b",combined)]
+          print("DSH_SAFE_WORDS "+",".join(safe_hits[:35]))
           print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
           PY
           unset TASK OPENROUTER_API_KEY
