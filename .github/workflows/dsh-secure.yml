@@ -228,9 +228,41 @@ jobs:
           print("OPENROUTER_SAFE_KEY_GATE http="+code+" hard_cap="+str(hard_cap)+" enough_for_canary="+str(good))
           with open(os.environ["GITHUB_OUTPUT"],"a") as o:o.write("ok="+("true" if good else "false")+"\n")
           PY
+      - name: Tiny OpenRouter model canary
+        id: tiny_probe
+        if: steps.key_gate.outputs.ok == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os,json,urllib.request,urllib.error
+          model=os.environ["DSH_MODEL"]
+          key=os.environ["OPENROUTER_API_KEY"]
+          payload={"model":model,"messages":[{"role":"user","content":"Reply OK."}],"max_tokens":64,"stream":False}
+          request=urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",data=json.dumps(payload).encode(),headers={"Authorization":"Bearer "+key,"Content-Type":"application/json","Accept":"application/json"},method="POST")
+          code="unavailable"
+          reason="none"
+          success=False
+          try:
+            with urllib.request.urlopen(request,timeout=25) as response:
+              code=str(response.status)
+              success=code=="200"
+              response.read(2048)
+          except urllib.error.HTTPError as exc:
+            code=str(exc.code)
+            try:
+              obj=json.loads(exc.read(4096))
+              source=(obj.get("error") or {}).get("metadata",{}).get("limit_source")
+              if source in ("openrouter_in_flight_budget","openrouter_key_limit","openrouter_credits"):reason=source
+            except Exception:pass
+          except Exception:
+            pass
+          print("OPENROUTER_SAFE_TINY_PROBE http="+code+" limit_source="+reason+" ok="+str(success))
+          with open(os.environ["GITHUB_OUTPUT"],"a") as fp: fp.write("ok="+("true" if success else "false")+"\n")
+          PY
       - name: Run DSH brain
         id: run_dsh
-        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.key_gate.outputs.ok == 'true'
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.key_gate.outputs.ok == 'true' && steps.tiny_probe.outputs.ok == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
