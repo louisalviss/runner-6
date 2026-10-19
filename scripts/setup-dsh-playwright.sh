@@ -54,6 +54,15 @@ cat >> "$PATCH_FILE" <<'YAML'
     compactionRetries: 1
     maxOverflowRetries: 1
 YAML
+
+# DSH rc.7 unconditionally calls watchUserPatches after boot. Register HMR
+# during initial tree composition to avoid its async create/watch race.
+cat >> "$PATCH_FILE" <<'YAML'
+- id: hmr
+  disabled: false
+  config:
+    root: []
+YAML
 chmod 600 "$PATCH_FILE"
 
 printf 'Playwright MCP %s ready with preinstalled Chrome via %s\n' "$PW_VERSION" "$PATCH_FILE"
