@@ -186,6 +186,27 @@ jobs:
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
+          # Report fixed diagnostic categories only. Never emit raw task, stderr, response or credentials.
+          python - <<'PY'
+          import os,re
+          from pathlib import Path
+          t=Path(os.environ["RUNNER_TEMP"])
+          err=(t/"dsh-error.txt").read_text(errors="replace") if (t/"dsh-error.txt").exists() else ""
+          out=(t/"dsh-output.txt").read_text(errors="replace") if (t/"dsh-output.txt").exists() else ""
+          combined=(err+"\n"+out).lower()
+          patterns=[
+            ("provider_auth",r"(401|403|unauthorized|invalid.api.key|authentication failed)"),
+            ("provider_quota",r"(402|429|rate limit|insufficient credits|quota exceeded)"),
+            ("provider_model",r"(model.*(not found|unsupported|invalid)|404.*model|unknown model)"),
+            ("model_settings",r"(yaml|config|setting|invalid.*model|model.*invalid)"),
+            ("tool_runtime",r"(mcp|playwright|browser|tool.*(failed|error|missing))"),
+            ("native_binary",r"(cannot find module|module not found|no such file|spawn.*enoent|node-pty)"),
+            ("api_request",r"(fetch failed|network|connection refused|timeout|status code)"),
+            ("parser",r"(syntaxerror|parse error|zoderror|invalid type)"),
+          ]
+          category=next((name for name,regex in patterns if re.search(regex,combined)),"unknown")
+          print("DSH_SAFE_DIAGNOSTIC category="+category+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out)))
+          PY
           unset TASK OPENROUTER_API_KEY
 
       - name: Execute queued media download
