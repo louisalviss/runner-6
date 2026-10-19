@@ -205,7 +205,20 @@ jobs:
             ("parser",r"(syntaxerror|parse error|zoderror|invalid type)"),
           ]
           category=next((name for name,regex in patterns if re.search(regex,combined)),"unknown")
-          print("DSH_SAFE_DIAGNOSTIC category="+category+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out)))
+          signatures={
+            "plugin_import":r"(failed to (load|import)|cannot find module|module not found)",
+            "plugin_start":r"(failonstartuperror|failed to start|mcp server|mcp-client)",
+            "headless_profile":r"(headless.*(unknown|invalid|not found)|unknown profile)",
+            "yaml_schema":r"(yamlexception|yaml parse|invalid configuration|unknown tag|duplicat(e|ed).*(id|key))",
+            "process_env":r"(undefined.*(env|cli)|playwright_mcp_cli)",
+            "provider_auth":r"(401|403|unauthorized|invalid api key)",
+            "model_not_found":r"(unknown model|model.*not found|model.*not supported)",
+            "api_failed":r"(fetch failed|http error|status code)",
+            "node_runtime":r"(err_module|typeerror|referenceerror|syntaxerror)",
+            "tool_error":r"(tool execution|tool call|browser error)",
+          }
+          flags=[name for name,pat in signatures.items() if re.search(pat,combined)]
+          print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
           PY
           unset TASK OPENROUTER_API_KEY
 
