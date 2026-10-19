@@ -257,6 +257,13 @@ jobs:
           flags=[name for name,pat in signatures.items() if re.search(pat,combined)]
           safe_terms=("error","failed","cannot","could","resolve","module","require","import","package","exports","plugin","plugins","cordova","cordis","patch","configuration","config","profile","invalid","unknown","model","provider","api","key","yaml","parse","json","schema","mcp","browser","server","tool","node","pty","koffi","file","directory","permission","spawn","timeout","undefined","startup","initialize","initialization","object","function","argument","option","missing","script","process","dependency","environment","runtime","disabled","duplicate")
           safe_hits=[x for x in safe_terms if re.search(r"\b"+re.escape(x)+r"\b",combined)]
+          # Emit only words from a fixed public diagnostic vocabulary; drop all other tokens.
+          public_vocab=set(("error fail failed cordis patch profile runtime boot startup node file path line process create read write load loading launch started completion exception stack at from into with on in the a an and or of for is was not no to by has had thrown message code entry object key target method type class default script module import plugin browser mcp server client connection data package settings yaml invalid unexpected unsupported duplicate cannot find missing unknown resolved resolve directory config configuration argument option environment env native builtin dependency dependencies version register plugin id insert array map value field apply applying conflict reject reason headless source model provider tool startup disabled output input home root run runs running initialization initializing initializing initialize user custom profile fatal warning unhandled sandbox subprocess local failed terminated state dead abort aborted internal body request invalid nonempty empty should expected undefined null unsupported implementation relative absolute string number true false call returned registry event timer socket initial creation bug validate validation cannot execute profile cordis.patch.yml").split())
+          for idx,line in enumerate(err.splitlines()[:8]):
+            tokens=re.findall(r"[A-Za-z]+",line.lower())
+            filtered=[w if w in public_vocab else "_" for w in tokens[:30]]
+            if filtered:print("DSH_SAFE_LINE_"+str(idx)+" "+" ".join(filtered))
+
           print("DSH_SAFE_WORDS "+",".join(safe_hits[:35]))
           print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
           PY
