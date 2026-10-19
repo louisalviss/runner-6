@@ -197,29 +197,9 @@ jobs:
           hits=[v for v in words if re.search(r"\b"+re.escape(v)+r"\b",err,re.I)]
           print("DSH_PREFLIGHT_SAFE stderr_flags="+(",".join(hits) or "none")+" stderr_len="+str(len(err))+" dump_len="+str(len(dump))+" compaction_row="+str("compaction-basic" in dump)+" browser_row="+str("browser-playwright-mcp" in dump))
           PY
-      - name: Force startup-only patch lifecycle for one-shot agent
-        id: startup_profile
-        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true'
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json,os
-          from pathlib import Path
-          manifest=Path(os.environ["DSH_HOME"])/"profiles"/"headless"/"package.json"
-          if not manifest.is_file(): raise SystemExit("DSH_HEADLESS_MANIFEST_MISSING")
-          obj=json.loads(manifest.read_text())
-          section=obj.get("dsh",{}).get("profile",{})
-          prior=section.get("patchReload")
-          if prior not in (None,"live","startup"): raise SystemExit("DSH_PATCH_RELOAD_UNEXPECTED")
-          section["patchReload"]="startup"
-          manifest.write_text(json.dumps(obj,ensure_ascii=False,indent=2)+"\n")
-          check=json.loads(manifest.read_text())
-          assert check["dsh"]["profile"]["patchReload"]=="startup"
-          print("DSH_ONE_SHOT_PATCH_MODE prior="+str(prior)+" current=startup")
-          PY
       - name: Run DSH brain
         id: run_dsh
-        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.startup_profile.conclusion == 'success'
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
