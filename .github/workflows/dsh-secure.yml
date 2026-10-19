@@ -197,9 +197,40 @@ jobs:
           hits=[v for v in words if re.search(r"\b"+re.escape(v)+r"\b",err,re.I)]
           print("DSH_PREFLIGHT_SAFE stderr_flags="+(",".join(hits) or "none")+" stderr_len="+str(len(err))+" dump_len="+str(len(dump))+" compaction_row="+str("compaction-basic" in dump)+" browser_row="+str("browser-playwright-mcp" in dump))
           PY
+      - name: Check OpenRouter key quota without inference
+        id: key_gate
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json,os,urllib.request,urllib.error
+          key=os.environ.get("OPENROUTER_API_KEY","")
+          code="unavailable"
+          good=False
+          hard_cap=False
+          try:
+            if len(key)<16: raise ValueError("KEY_MISSING")
+            req=urllib.request.Request("https://openrouter.ai/api/v1/key",headers={"Authorization":"Bearer "+key,"Accept":"application/json"})
+            with urllib.request.urlopen(req,timeout=12) as response:
+              code=str(response.status)
+              doc=json.loads(response.read(32768))
+            data=doc.get("data") if isinstance(doc,dict) else None
+            if not isinstance(data,dict):raise ValueError("RESPONSE_INVALID")
+            cap=data.get("limit")
+            available=data.get("limit_remaining")
+            hard_cap=cap is not None and available is not None
+            good=hard_cap and float(available)>=0.01 and float(cap)>0
+          except urllib.error.HTTPError as e:
+            code=str(e.code)
+          except Exception:
+            pass
+          print("OPENROUTER_SAFE_KEY_GATE http="+code+" hard_cap="+str(hard_cap)+" enough_for_canary="+str(good))
+          with open(os.environ["GITHUB_OUTPUT"],"a") as o:o.write("ok="+("true" if good else "false")+"\n")
+          PY
       - name: Run DSH brain
         id: run_dsh
-        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true'
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.key_gate.outputs.ok == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -271,6 +302,18 @@ jobs:
               picked=[x for x in identifiers[-4:] if len(x)<=52 and x.lower() not in ("typeerror","error")]
               print("DSH_SAFE_MISSING_METHOD "+",".join(picked))
               break
+          provider_signatures={
+            "insufficient_credits":r"(insufficient.*credit|credit.*insufficient|out of credits)",
+            "quota_or_spending":r"(quota|budget|limit_remaining|in.flight.budget|exhausted)",
+            "rate_limited":r"(rate.limited|too many requests|\b429\b)",
+            "auth_failed":r"(unauthorized|invalid.api.key|\b401\b|\b403\b)",
+            "payment_required":r"(payment required|\b402\b)",
+            "model_unavailable":r"(model.*not found|no endpoints|unsupported model|\b404\b)",
+            "bad_request":r"(invalid request|\b400\b|\b422\b)",
+            "context_limit":r"(context length|max tokens|token limit)",
+          }
+          provider_hits=[name for name,pat in provider_signatures.items() if re.search(pat,combined)]
+          print("DSH_SAFE_PROVIDER_FLAGS "+(",".join(provider_hits) or "none"))
           print("DSH_SAFE_WORDS "+",".join(safe_hits[:35]))
           print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
           PY
