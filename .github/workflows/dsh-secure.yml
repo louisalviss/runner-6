@@ -15,6 +15,14 @@ on:
           - baseline
           - flash1017
         default: baseline
+      diagnostic_patch:
+        description: "Experiment only: leave normal patch enabled or remove it to isolate bootstrap failure"
+        required: false
+        type: choice
+        options:
+          - normal
+          - none
+        default: normal
   push:
     branches: [main]
     paths:
@@ -155,6 +163,15 @@ jobs:
       - name: Configure Playwright MCP browser
         if: steps.decrypt.outputs.ready == 'true'
         run: bash workspace/scripts/setup-dsh-playwright.sh workspace
+
+      - name: Disable patch for isolated bootstrap diagnosis
+        if: inputs.diagnostic_patch == 'none'
+        run: |
+          set -euo pipefail
+          if [ -f "$DSH_HOME/cordis.patch.yml" ]; then
+            mv "$DSH_HOME/cordis.patch.yml" "$RUNNER_TEMP/cordis.patch.diag.disabled"
+          fi
+          echo "DSH diagnostic patch disabled (experiment branch only)"
 
       - name: Sanity DSH binary
         if: steps.decrypt.outputs.ready == 'true'
