@@ -15,14 +15,6 @@ on:
           - baseline
           - flash1017
         default: baseline
-      diagnostic_patch:
-        description: "Experiment only: leave normal patch enabled or remove it to isolate bootstrap failure"
-        required: false
-        type: choice
-        options:
-          - normal
-          - none
-        default: normal
   push:
     branches: [main]
     paths:
@@ -133,7 +125,7 @@ jobs:
                   - id: deepseek/deepseek-v4-pro
                     name: DeepSeek V4 Pro
                     contextWindow: 1000000
-                    maxTokens: 2048
+                    maxTokens: 16384
                     input: [text]
                   - id: deepseek/deepseek-v4.1-flash-1017
                     name: DeepSeek V4.1 Flash 1017 (opt-in)
@@ -163,15 +155,6 @@ jobs:
       - name: Configure Playwright MCP browser
         if: steps.decrypt.outputs.ready == 'true'
         run: bash workspace/scripts/setup-dsh-playwright.sh workspace
-
-      - name: Disable patch for isolated bootstrap diagnosis
-        if: inputs.diagnostic_patch == 'none'
-        run: |
-          set -euo pipefail
-          if [ -f "$DSH_HOME/cordis.patch.yml" ]; then
-            mv "$DSH_HOME/cordis.patch.yml" "$RUNNER_TEMP/cordis.patch.diag.disabled"
-          fi
-          echo "DSH diagnostic patch disabled (experiment branch only)"
 
       - name: Sanity DSH binary
         if: steps.decrypt.outputs.ready == 'true'
@@ -228,41 +211,9 @@ jobs:
           print("OPENROUTER_SAFE_KEY_GATE http="+code+" hard_cap="+str(hard_cap)+" enough_for_canary="+str(good))
           with open(os.environ["GITHUB_OUTPUT"],"a") as o:o.write("ok="+("true" if good else "false")+"\n")
           PY
-      - name: Tiny OpenRouter model canary
-        id: tiny_probe
-        if: steps.key_gate.outputs.ok == 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          python - <<'PY'
-          import os,json,urllib.request,urllib.error
-          model=os.environ["DSH_MODEL"]
-          key=os.environ["OPENROUTER_API_KEY"]
-          payload={"model":model,"messages":[{"role":"user","content":"Reply OK."}],"max_tokens":64,"stream":False}
-          request=urllib.request.Request("https://openrouter.ai/api/v1/chat/completions",data=json.dumps(payload).encode(),headers={"Authorization":"Bearer "+key,"Content-Type":"application/json","Accept":"application/json"},method="POST")
-          code="unavailable"
-          reason="none"
-          success=False
-          try:
-            with urllib.request.urlopen(request,timeout=25) as response:
-              code=str(response.status)
-              success=code=="200"
-              response.read(2048)
-          except urllib.error.HTTPError as exc:
-            code=str(exc.code)
-            try:
-              obj=json.loads(exc.read(4096))
-              source=(obj.get("error") or {}).get("metadata",{}).get("limit_source")
-              if source in ("openrouter_in_flight_budget","openrouter_key_limit","openrouter_credits"):reason=source
-            except Exception:pass
-          except Exception:
-            pass
-          print("OPENROUTER_SAFE_TINY_PROBE http="+code+" limit_source="+reason+" ok="+str(success))
-          with open(os.environ["GITHUB_OUTPUT"],"a") as fp: fp.write("ok="+("true" if success else "false")+"\n")
-          PY
       - name: Run DSH brain
         id: run_dsh
-        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.key_gate.outputs.ok == 'true' && steps.tiny_probe.outputs.ok == 'true'
+        if: steps.decrypt.outputs.ready == 'true' && steps.dsh_preflight.outputs.ok == 'true' && steps.key_gate.outputs.ok == 'true'
         working-directory: workspace
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -286,68 +237,25 @@ jobs:
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
-          # Report fixed diagnostic categories only. Never emit raw task, stderr, response or credentials.
+          # Report only fixed error categories, never raw prompt, output or stderr.
           python - <<'PY'
           import os,re
           from pathlib import Path
           t=Path(os.environ["RUNNER_TEMP"])
           err=(t/"dsh-error.txt").read_text(errors="replace") if (t/"dsh-error.txt").exists() else ""
           out=(t/"dsh-output.txt").read_text(errors="replace") if (t/"dsh-output.txt").exists() else ""
-          combined=(err+"\n"+out).lower()
-          patterns=[
-            ("provider_auth",r"(401|403|unauthorized|invalid.api.key|authentication failed)"),
-            ("provider_quota",r"(402|429|rate limit|insufficient credits|quota exceeded)"),
-            ("provider_model",r"(model.*(not found|unsupported|invalid)|404.*model|unknown model)"),
-            ("model_settings",r"(yaml|config|setting|invalid.*model|model.*invalid)"),
-            ("tool_runtime",r"(mcp|playwright|browser|tool.*(failed|error|missing))"),
-            ("native_binary",r"(cannot find module|module not found|no such file|spawn.*enoent|node-pty)"),
-            ("api_request",r"(fetch failed|network|connection refused|timeout|status code)"),
-            ("parser",r"(syntaxerror|parse error|zoderror|invalid type)"),
+          message=(err+"\\n"+out).lower()
+          categories=[
+            ("provider_payment",r"(\\b402\\b|payment required|insufficient credits)"),
+            ("provider_auth",r"(\\b401\\b|\\b403\\b|invalid api key|unauthorized)"),
+            ("provider_rate_limit",r"(\\b429\\b|rate limit)"),
+            ("provider_model",r"(unknown model|unsupported model|model not found)"),
+            ("tool_runtime",r"(mcp server|playwright|tool.*(failed|error)|browser.*error)"),
+            ("configuration",r"(invalid configuration|yaml parse|registerconfig|patch.layer)"),
+            ("network",r"(network error|connection refused|fetch failed)"),
           ]
-          category=next((name for name,regex in patterns if re.search(regex,combined)),"unknown")
-          signatures={
-            "plugin_import":r"(failed to (load|import)|cannot find module|module not found)",
-            "plugin_start":r"(failonstartuperror|failed to start|mcp server|mcp-client)",
-            "headless_profile":r"(headless.*(unknown|invalid|not found)|unknown profile)",
-            "yaml_schema":r"(yamlexception|yaml parse|invalid configuration|unknown tag|duplicat(e|ed).*(id|key))",
-            "process_env":r"(undefined.*(env|cli)|playwright_mcp_cli)",
-            "provider_auth":r"(401|403|unauthorized|invalid api key)",
-            "model_not_found":r"(unknown model|model.*not found|model.*not supported)",
-            "api_failed":r"(fetch failed|http error|status code)",
-            "node_runtime":r"(err_module|typeerror|referenceerror|syntaxerror)",
-            "tool_error":r"(tool execution|tool call|browser error)",
-          }
-          flags=[name for name,pat in signatures.items() if re.search(pat,combined)]
-          safe_terms=("error","failed","cannot","could","resolve","module","require","import","package","exports","plugin","plugins","cordova","cordis","patch","configuration","config","profile","invalid","unknown","model","provider","api","key","yaml","parse","json","schema","mcp","browser","server","tool","node","pty","koffi","file","directory","permission","spawn","timeout","undefined","startup","initialize","initialization","object","function","argument","option","missing","script","process","dependency","environment","runtime","disabled","duplicate")
-          safe_hits=[x for x in safe_terms if re.search(r"\b"+re.escape(x)+r"\b",combined)]
-          # Emit only words from a fixed public diagnostic vocabulary; drop all other tokens.
-          public_vocab=set(("error fail failed cordis patch profile runtime boot startup node file path line process create read write load loading launch started completion exception stack at from into with on in the a an and or of for is was not no to by has had thrown message code entry object key target method type class default script module import plugin browser mcp server client connection data package settings yaml invalid unexpected unsupported duplicate cannot find missing unknown resolved resolve directory config configuration argument option environment env native builtin dependency dependencies version register plugin id insert array map value field apply applying conflict reject reason headless source model provider tool startup disabled output input home root run runs running initialization initializing initializing initialize user custom profile fatal warning unhandled sandbox subprocess local failed terminated state dead abort aborted internal body request invalid nonempty empty should expected undefined null unsupported implementation relative absolute string number true false call returned registry event timer socket initial creation bug validate validation cannot execute profile cordis.patch.yml").split())
-          for idx,line in enumerate(err.splitlines()[:8]):
-            tokens=re.findall(r"[A-Za-z]+",line.lower())
-            filtered=[w if w in public_vocab else "_" for w in tokens[:30]]
-            if filtered:print("DSH_SAFE_LINE_"+str(idx)+" "+" ".join(filtered))
-
-          for ln in err.splitlines():
-            if "is not a function" in ln:
-              expression=ln.split("is not a function",1)[0]
-              identifiers=re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*",expression)
-              picked=[x for x in identifiers[-4:] if len(x)<=52 and x.lower() not in ("typeerror","error")]
-              print("DSH_SAFE_MISSING_METHOD "+",".join(picked))
-              break
-          provider_signatures={
-            "insufficient_credits":r"(insufficient.*credit|credit.*insufficient|out of credits)",
-            "quota_or_spending":r"(quota|budget|limit_remaining|in.flight.budget|exhausted)",
-            "rate_limited":r"(rate.limited|too many requests|\b429\b)",
-            "auth_failed":r"(unauthorized|invalid.api.key|\b401\b|\b403\b)",
-            "payment_required":r"(payment required|\b402\b)",
-            "model_unavailable":r"(model.*not found|no endpoints|unsupported model|\b404\b)",
-            "bad_request":r"(invalid request|\b400\b|\b422\b)",
-            "context_limit":r"(context length|max tokens|token limit)",
-          }
-          provider_hits=[name for name,pat in provider_signatures.items() if re.search(pat,combined)]
-          print("DSH_SAFE_PROVIDER_FLAGS "+(",".join(provider_hits) or "none"))
-          print("DSH_SAFE_WORDS "+",".join(safe_hits[:35]))
-          print("DSH_SAFE_DIAGNOSTIC category="+category+" flags="+(",".join(flags) or "none")+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out))+" stderr_bytes="+str(len(err.encode("utf-8"))))
+          category=next((name for name,pattern in categories if re.search(pattern,message)),"unclassified")
+          print("DSH_SAFE_CATEGORY="+category+" stderr_present="+str(bool(err))+" stdout_present="+str(bool(out)))
           PY
           unset TASK OPENROUTER_API_KEY
 
