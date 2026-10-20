@@ -527,8 +527,10 @@ jobs:
         if: always()
         env:
           DECRYPT_READY: ${{ steps.decrypt.outputs.ready }}
+          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
         run: |
           [ "${DECRYPT_READY:-false}" = true ] || { echo 'Secure decrypt failed'; exit 1; }
+          [ "${DSH_EXIT_CODE:-missing}" = 0 ] || { echo 'DSH execution did not complete'; exit 1; }
           STATUS="$(cat "$RUNNER_TEMP/final-status.txt" 2>/dev/null || printf error)"
           [ "$STATUS" = success ] || { echo "DSH secure v3 failed: $STATUS"; exit 1; }
           echo success
