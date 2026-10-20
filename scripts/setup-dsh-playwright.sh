@@ -42,4 +42,27 @@ cat > "$PATCH_FILE" <<'YAML'
         failOnStartupError: true
 YAML
 
+# Restore DSH compaction protection after configuring browser MCP.
+cat >> "$PATCH_FILE" <<'YAML'
+- id: compaction-basic
+  disabled: false
+  config:
+    auto: true
+    thresholdRatio: 0.06
+    retainTokens: 12000
+    maxTokens: 4096
+    compactionRetries: 1
+    maxOverflowRetries: 1
+YAML
+
+# DSH rc.7 unconditionally calls watchUserPatches after boot. Register HMR
+# during initial tree composition to avoid its async create/watch race.
+cat >> "$PATCH_FILE" <<'YAML'
+- id: hmr
+  disabled: false
+  config:
+    root: []
+YAML
+chmod 600 "$PATCH_FILE"
+
 printf 'Playwright MCP %s ready with preinstalled Chrome via %s\n' "$PW_VERSION" "$PATCH_FILE"
