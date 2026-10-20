@@ -7,6 +7,14 @@ on:
         description: "Encrypted DSH envelope"
         required: true
         type: string
+      model_variant:
+        description: "Opt-in test model; baseline stays default"
+        required: false
+        type: choice
+        options:
+          - baseline
+          - flash1017
+        default: baseline
   push:
     branches: [main]
     paths:
@@ -16,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: runner-6-dsh-secure
+  group: runner-6-dsh-secure-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -26,7 +34,8 @@ jobs:
     env:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
-      DSH_MODEL: "deepseek/deepseek-v4-pro"
+      DSH_MODEL: ${{ inputs.model_variant == 'flash1017' && 'deepseek/deepseek-v4.1-flash-1017' || 'deepseek/deepseek-v4-pro' }}
+      DSH_STATUS_BRANCH: ${{ github.ref_name }}
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
     steps:
@@ -90,19 +99,23 @@ jobs:
           printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":false}\n' \
             "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" > "$RUNNER_TEMP/status.json"
           C="$(base64 -w0 "$RUNNER_TEMP/status.json")"
-          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-status.json?ref=main" --jq .sha 2>/dev/null || true)"
-          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f branch=main >/dev/null; fi
+          S="$(gh api "repos/$GITHUB_REPOSITORY/contents/dsh-status.json?ref=$DSH_STATUS_BRANCH" --jq .sha 2>/dev/null || true)"
+          if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f sha="$S" -f branch="$DSH_STATUS_BRANCH" >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/dsh-status.json" -f message='DSH secure v3 started [skip ci]' -f content="$C" -f branch="$DSH_STATUS_BRANCH" >/dev/null; fi
 
       - name: Configure OpenRouter
         if: steps.decrypt.outputs.ready == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$DSH_HOME"
-          cat > "$DSH_HOME/settings.yaml" <<'YAML'
+          case "$DSH_MODEL" in
+            deepseek/deepseek-v4-pro|deepseek/deepseek-v4.1-flash-1017) ;;
+            *) echo "Unsupported A/B model"; exit 3 ;;
+          esac
+          cat > "$DSH_HOME/settings.yaml" <<YAML
           llm-pi-ai:
             providers:
               openrouter-v4:
-                displayName: OpenRouter DeepSeek V4 Pro
+                displayName: OpenRouter DeepSeek
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
                 baseURL: https://openrouter.ai/api/v1
@@ -114,9 +127,14 @@ jobs:
                     contextWindow: 1000000
                     maxTokens: 16384
                     input: [text]
+                  - id: deepseek/deepseek-v4.1-flash-1017
+                    name: DeepSeek V4.1 Flash 1017
+                    contextWindow: 1000000
+                    maxTokens: 2048
+                    input: [text]
           agent-default-model:
             provider: openrouter-v4
-            model: deepseek/deepseek-v4-pro
+            model: $DSH_MODEL
           YAML
           chmod 600 "$DSH_HOME/settings.yaml"
 
@@ -271,15 +289,13 @@ jobs:
               p=line.strip()
               if p.startswith('workspace/'): p=p[len('workspace/'):]
               if p: files.append(p)
-          if requested and dlstatus=='success' and media:
-            status='success'
-          elif requested and dlstatus!='success':
-            status='error'
-          elif os.environ.get('MISSING_KEY')=='true':
+          if os.environ.get('MISSING_KEY')=='true':
             status='missing_openrouter_key'
           elif os.environ.get('TIMED_OUT')=='true':
             status='timeout'
           elif code!=0:
+            status='error'
+          elif requested and (dlstatus!='success' or not media):
             status='error'
           else:
             status='success'
@@ -338,7 +354,7 @@ jobs:
           ART=false; [ "${MEDIA_PRESENT:-false}" = true ] && ART=true
           printf '{"status":"%s","run_id":"%s","client_id":"%s","provider":"%s","model":"%s","browser":"playwright-mcp","runtime":"cached-dsh","artifact_present":%s,"artifact_encrypted":false,"mirror_present":%s}\n' \
             "$STATUS" "$GITHUB_RUN_ID" "$CID" "$DSH_PROVIDER" "$DSH_MODEL" "$ART" "$([ -f "$RUNNER_TEMP/mirror-result.enc.json" ] && printf true || printf false)" > "$RUNNER_TEMP/status.json"
-          put(){ P="$1"; F="$2"; M="$3"; C="$(base64 -w0 "$F")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=main" --jq .sha 2>/dev/null || true)"; if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f sha="$S" -f branch=main >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f branch=main >/dev/null; fi; }
+          put(){ P="$1"; F="$2"; M="$3"; C="$(base64 -w0 "$F")"; S="$(gh api "repos/$GITHUB_REPOSITORY/contents/$P?ref=$DSH_STATUS_BRANCH" --jq .sha 2>/dev/null || true)"; if [ -n "$S" ]; then gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f sha="$S" -f branch="$DSH_STATUS_BRANCH" >/dev/null; else gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="$M" -f content="$C" -f branch="$DSH_STATUS_BRANCH" >/dev/null; fi; }
           [ -f "$RUNNER_TEMP/result.enc.json" ] && put dsh-result.enc.json "$RUNNER_TEMP/result.enc.json" 'Update encrypted DSH v3 result [skip ci]'
           [ -f "$RUNNER_TEMP/mirror-result.enc.json" ] && put dsh-mirror-result.enc.json "$RUNNER_TEMP/mirror-result.enc.json" 'Update encrypted DSH mirror result [skip ci]'
           put dsh-status.json "$RUNNER_TEMP/status.json" 'Update safe DSH v3 status [skip ci]'
@@ -348,8 +364,10 @@ jobs:
         if: always()
         env:
           DECRYPT_READY: ${{ steps.decrypt.outputs.ready }}
+          DSH_EXIT_CODE: ${{ steps.run_dsh.outputs.exit_code }}
         run: |
           [ "${DECRYPT_READY:-false}" = true ] || { echo 'Secure decrypt failed'; exit 1; }
+          [ "${DSH_EXIT_CODE:-missing}" = 0 ] || { echo 'DSH execution did not complete'; exit 1; }
           STATUS="$(cat "$RUNNER_TEMP/final-status.txt" 2>/dev/null || printf error)"
           [ "$STATUS" = success ] || { echo "DSH secure v3 failed: $STATUS"; exit 1; }
           echo success
