@@ -133,12 +133,12 @@ jobs:
                   - id: deepseek/deepseek-v4-pro
                     name: DeepSeek V4 Pro
                     contextWindow: 1000000
-                    maxTokens: 1024
+                    maxTokens: 2048
                     input: [text]
                   - id: deepseek/deepseek-v4.1-flash-1017
                     name: DeepSeek V4.1 Flash 1017 (opt-in)
                     contextWindow: 1000000
-                    maxTokens: 1024
+                    maxTokens: 2048
                     input: [text]
           agent-default-model:
             provider: openrouter-v4
