@@ -112,8 +112,9 @@ class Guard(http.server.BaseHTTPRequestHandler):
         state["reserved_usd"] = round(state["reserved_usd"] + reserve, 9)
         save()  # fail-closed, reserve BEFORE the remote call
 
-        # Disable routing to unexpected providers during guarded testing.
-        body["provider"] = {"order": ["DeepSeek"], "allow_fallbacks": False}
+        # Restrict endpoint prices without pinning an unavailable provider.
+        # OpenRouter max_price uses USD per million tokens.
+        body["provider"] = {"sort": "price", "max_price": {"prompt": INPUT_UPPER_PER_M, "completion": OUTPUT_UPPER_PER_M}}
         request = urllib.request.Request(
             UPSTREAM + "/chat/completions",
             data=json.dumps(body, separators=(",", ":")).encode(),
