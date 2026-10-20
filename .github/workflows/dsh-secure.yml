@@ -35,7 +35,7 @@ jobs:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
       DSH_MODEL: ${{ inputs.model_variant == 'flash1017' && 'deepseek/deepseek-v4.1-flash-1017' || 'deepseek/deepseek-v4-pro' }}
-      DSH_STATUS_BRANCH: ${{ github.ref_name }}
+      DSH_STATUS_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'experiment/dsh-flash1017-results-20261020' }}
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
     steps:
