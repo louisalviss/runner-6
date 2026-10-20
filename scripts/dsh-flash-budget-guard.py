@@ -93,8 +93,23 @@ class Guard(http.server.BaseHTTPRequestHandler):
             ceiling = body.get("max_completion_tokens", body.get("max_tokens", MAX_OUTPUT))
             ceiling = int(ceiling)
             assert 1 <= ceiling <= MAX_OUTPUT
-            # No multimodal payloads or external providers under this budget estimate.
-            assert all(isinstance(x, dict) for x in body["messages"])
+            for limit_field in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+                if limit_field in body and body[limit_field] is not None:
+                    assert 1 <= int(body[limit_field]) <= MAX_OUTPUT
+            # Guard applies only to text requests with a single named model;
+            # non-text modalities could incur fees not covered by this estimate.
+            assert not body.get("models") and not body.get("plugins")
+            assert not body.get("modalities")
+            for message in body["messages"]:
+                assert isinstance(message, dict)
+                content = message.get("content")
+                if isinstance(content, list):
+                    assert all(isinstance(part, dict) and
+                               part.get("type") in ("text", "input_text") and
+                               isinstance(part.get("text"), str)
+                               for part in content)
+                else:
+                    assert content is None or isinstance(content, str)
         except (AssertionError, TypeError, ValueError, KeyError):
             self.send_error_json(422, "MODEL_OR_TOKEN_LIMIT")
             return
