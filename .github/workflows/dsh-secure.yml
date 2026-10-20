@@ -452,15 +452,13 @@ jobs:
               p=line.strip()
               if p.startswith('workspace/'): p=p[len('workspace/'):]
               if p: files.append(p)
-          if requested and dlstatus=='success' and media:
-            status='success'
-          elif requested and dlstatus!='success':
-            status='error'
-          elif os.environ.get('MISSING_KEY')=='true':
+          if os.environ.get('MISSING_KEY')=='true':
             status='missing_openrouter_key'
           elif os.environ.get('TIMED_OUT')=='true':
             status='timeout'
           elif code!=0:
+            status='error'
+          elif requested and (dlstatus!='success' or not media):
             status='error'
           else:
             status='success'
