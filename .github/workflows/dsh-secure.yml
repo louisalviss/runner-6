@@ -35,7 +35,6 @@ jobs:
       DSH_VERSION: "0.1.0-rc.7"
       DSH_PROVIDER: "openrouter-v4"
       DSH_MODEL: ${{ inputs.model_variant == 'flash1017' && 'deepseek/deepseek-v4.1-flash-1017' || 'deepseek/deepseek-v4-pro' }}
-      DSH_API_BASE_URL: ${{ inputs.model_variant == 'flash1017' && 'http://127.0.0.1:18731/api/v1' || 'https://openrouter.ai/api/v1' }}
       DSH_STATUS_BRANCH: ${{ github.ref_name == 'main' && 'main' || 'experiment/dsh-flash1017-results-20261020' }}
       PLAYWRIGHT_MCP_VERSION: "0.0.78"
 
@@ -119,7 +118,7 @@ jobs:
                 displayName: OpenRouter DeepSeek
                 apiKeyEnv: OPENROUTER_API_KEY
                 api: openai-completions
-                baseURL: $DSH_API_BASE_URL
+                baseURL: https://openrouter.ai/api/v1
                 compat:
                   thinkingFormat: openrouter
                 models:
@@ -178,58 +177,12 @@ jobs:
             exit 0
           fi
           TASK="$(cat "$RUNNER_TEMP/dsh-task.txt")"
-          # Only Flash opt-in traffic uses the local, fail-closed budget relay.
-          # V4 Pro baseline continues directly to OpenRouter unchanged.
-          DSH_CLIENT_KEY="$OPENROUTER_API_KEY"
-          PROXY_PID=""
-          if [ "$DSH_MODEL" = deepseek/deepseek-v4.1-flash-1017 ]; then
-            DSH_CLIENT_KEY="guard-$(openssl rand -hex 24)"
-            export DSH_GUARD_REPORT="$RUNNER_TEMP/dsh-budget.json"
-            export DSH_GUARD_PORT=18731
-            export DSH_GUARD_MAX_CALLS=10
-            export DSH_GUARD_MAX_RESERVED_USD=0.20
-            export DSH_GUARD_MAX_OUTPUT_TOKENS=2048
-            DSH_UPSTREAM_KEY="$OPENROUTER_API_KEY" \
-              DSH_GUARD_CLIENT_TOKEN="$DSH_CLIENT_KEY" \
-              python3 scripts/dsh-flash-budget-guard.py \
-                > "$RUNNER_TEMP/dsh-guard.log" 2>&1 &
-            PROXY_PID=$!
-            READY=false
-            for _ in $(seq 1 35); do
-              if curl --noproxy '*' -fsS --max-time 1 http://127.0.0.1:18731/healthz >/dev/null 2>&1; then READY=true; break; fi
-              sleep 0.2
-            done
-            if [ "$READY" != true ]; then
-              echo 'DSH budget relay not ready' > "$RUNNER_TEMP/dsh-error.txt"
-              : > "$RUNNER_TEMP/dsh-output.txt"
-              echo 'missing_key=false' >> "$GITHUB_OUTPUT"
-              echo 'exit_code=70' >> "$GITHUB_OUTPUT"
-              echo 'timed_out=false' >> "$GITHUB_OUTPUT"
-              kill "$PROXY_PID" 2>/dev/null || true
-              exit 0
-            fi
-          fi
           set +e
-          OPENROUTER_API_KEY="$DSH_CLIENT_KEY" \
-            timeout --signal=TERM --kill-after=10s 210s \
-              "$DSH_BIN" --profile headless "$TASK" \
-              > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
+          timeout --signal=TERM --kill-after=10s 210s \
+            "$DSH_BIN" --profile headless "$TASK" \
+            > "$RUNNER_TEMP/dsh-output.txt" 2> "$RUNNER_TEMP/dsh-error.txt"
           CODE=$?
           set -e
-          if [ -n "$PROXY_PID" ]; then
-            kill "$PROXY_PID" 2>/dev/null || true
-            wait "$PROXY_PID" 2>/dev/null || true
-            if [ -s "$DSH_GUARD_REPORT" ]; then
-              python3 - <<'PY'
-          import json,os
-          d=json.load(open(os.environ["DSH_GUARD_REPORT"]))
-          print("DSH_SAFE_BUDGET requests="+str(d.get("requests_accepted",0))+
-                " rejected="+str(d.get("requests_rejected",0))+
-                " reserved_usd="+str(d.get("reserved_usd",0))+
-                " observed_usd="+str(round(d.get("observed_usage_cost_usd",0),7)))
-          PY
-            fi
-          fi
           echo 'missing_key=false' >> "$GITHUB_OUTPUT"
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           if [ "$CODE" = 124 ] || [ "$CODE" = 137 ]; then echo 'timed_out=true' >> "$GITHUB_OUTPUT"; else echo 'timed_out=false' >> "$GITHUB_OUTPUT"; fi
@@ -308,7 +261,6 @@ jobs:
           DOWNLOAD_EXIT_CODE: ${{ steps.download.outputs.exit_code }}
           MEDIA_PRESENT: ${{ steps.media.outputs.present }}
           MEDIA_COUNT: ${{ steps.media.outputs.count }}
-          FLASH_GUARD_REPORT: ${{ runner.temp }}/dsh-budget.json
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -373,8 +325,7 @@ jobs:
             'artifact_count':int(os.environ.get('MEDIA_COUNT') or 0),
             'artifact_files':files,
             'artifact_name':f"dsh-media-{os.environ['GITHUB_RUN_ID']}" if media else None,
-            'artifact_encrypted':False,
-            'flash_budget':json.loads(Path(os.environ['FLASH_GUARD_REPORT']).read_text()) if Path(os.environ['FLASH_GUARD_REPORT']).is_file() else None
+            'artifact_encrypted':False
           }
           (t/'result.json').write_text(json.dumps(result,ensure_ascii=False,separators=(',',':')))
           (t/'final-status.txt').write_text(status)
